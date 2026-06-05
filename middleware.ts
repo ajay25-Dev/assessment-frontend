@@ -2,7 +2,7 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 const authEntryRoutes = new Set(["/login", "/signup"]);
-const protectedPrefixes = ["/dashboard", "/assessment"];
+const protectedPrefixes = ["/dashboard", "/assessment", "/admin"];
 
 function isProtectedRoute(pathname: string) {
   return protectedPrefixes.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
@@ -43,7 +43,7 @@ export async function middleware(request: NextRequest) {
 
   if (user && authEntryRoutes.has(request.nextUrl.pathname)) {
     const url = request.nextUrl.clone();
-    url.pathname = "/dashboard";
+    url.pathname = "/auth/post-login";
     url.search = "";
     return NextResponse.redirect(url);
   }

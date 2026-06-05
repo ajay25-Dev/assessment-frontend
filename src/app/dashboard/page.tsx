@@ -15,9 +15,18 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { supabaseService } from "@/lib/supabase-service";
 import { supabaseServer } from "@/lib/supabase-server";
+import { getAuthRole, normalizeRole } from "@/lib/user-role";
 
 export const dynamic = "force-dynamic";
+
+const subjectTypeLabels: Record<string, string> = {
+  coding_with_data: "Coding with data",
+  coding_without_data: "Coding without data",
+  text: "Text",
+  subjective: "Subjective",
+};
 
 type ScoreTone = "green" | "amber" | "red" | "blue";
 type RiskLevel = "Low" | "Medium" | "High";
@@ -42,6 +51,15 @@ type StudentAssessmentReportRow = {
   faculty_insight: string | null;
   company_recommendation: string | null;
   created_at: string | null;
+};
+
+type AvailableAssessment = {
+  id: string;
+  title: string | null;
+  description: string | null;
+  duration_minutes: number | null;
+  status: string | null;
+  subjects: string[];
 };
 
 function clampScore(value: number | null | undefined) {
@@ -156,7 +174,84 @@ function ScoreCard({
   );
 }
 
-function EmptyReportState({ email }: { email?: string | null }) {
+function AvailableAssessments({ assessments }: { assessments: AvailableAssessment[] }) {
+  if (assessments.length === 0) {
+    return (
+      <article className="rounded-[8px] border border-amber-200 bg-amber-50 p-5">
+        <p className="text-sm font-semibold uppercase tracking-[0.16em] text-amber-800">
+          No Test Assigned
+        </p>
+        <h2 className="mt-3 text-2xl font-semibold text-slate-950">No assessment assigned to your batch yet</h2>
+        <p className="mt-3 text-sm leading-6 text-slate-700">
+          Ask the admin to assign a published assessment to your batch.
+        </p>
+      </article>
+    );
+  }
+
+  return (
+    <div className="grid gap-4">
+      {assessments.map((assessment) => (
+        <article key={assessment.id} className="rounded-[8px] border border-emerald-200 bg-emerald-50 p-5">
+          <p className="text-sm font-semibold uppercase tracking-[0.16em] text-emerald-800">
+            Test Available
+          </p>
+          <h2 className="mt-3 text-2xl font-semibold text-slate-950">
+            {assessment.title || "Placement Readiness Assessment"}
+          </h2>
+          <p className="mt-3 text-sm leading-6 text-slate-700">
+            {assessment.description ||
+              "Complete hard-level DSA, very hard scenario-based SQL, OOPs, and Core CS MCQs to unlock your report."}
+          </p>
+          {assessment.subjects.length > 0 ? (
+            <div className="mt-4 flex flex-wrap gap-2">
+              {assessment.subjects.map((subject) => (
+                <span key={subject} className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-emerald-800">
+                  {subject}
+                </span>
+              ))}
+            </div>
+          ) : null}
+          <dl className="mt-5 grid gap-3 text-sm sm:grid-cols-3">
+            <div className="rounded-[8px] bg-white p-3">
+              <dt className="font-medium text-slate-500">Duration</dt>
+              <dd className="mt-1 font-semibold text-slate-950">{assessment.duration_minutes || 180} min</dd>
+            </div>
+            <div className="rounded-[8px] bg-white p-3">
+              <dt className="font-medium text-slate-500">Sections</dt>
+              <dd className="mt-1 font-semibold text-slate-950">4 Parts</dd>
+            </div>
+            <div className="rounded-[8px] bg-white p-3">
+              <dt className="font-medium text-slate-500">Level</dt>
+              <dd className="mt-1 font-semibold text-slate-950">Hard</dd>
+            </div>
+          </dl>
+          <div className="mt-4 grid gap-2 text-sm sm:grid-cols-2">
+            {["DSA: 90 min", "SQL: 30 min", "OOPs: 30 min", "Core CS: 30 min"].map((item) => (
+              <div key={item} className="rounded-[8px] bg-white/75 px-3 py-2 font-medium text-slate-800">
+                {item}
+              </div>
+            ))}
+          </div>
+          <Link
+            href={`/assessment/start?assessmentId=${assessment.id}`}
+            className="mt-5 inline-flex h-11 items-center justify-center rounded-[8px] bg-emerald-700 px-5 text-sm font-semibold text-white hover:bg-emerald-800"
+          >
+            Start Test
+          </Link>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function EmptyReportState({
+  email,
+  availableAssessments,
+}: {
+  email?: string | null;
+  availableAssessments: AvailableAssessment[];
+}) {
   return (
     <main className="min-h-dvh bg-[#f6f8f4]">
       <DashboardTopBar />
@@ -174,45 +269,7 @@ function EmptyReportState({ email }: { email?: string | null }) {
               </p>
             </div>
 
-            <article className="rounded-[8px] border border-emerald-200 bg-emerald-50 p-5">
-              <p className="text-sm font-semibold uppercase tracking-[0.16em] text-emerald-800">
-                Test Available
-              </p>
-              <h2 className="mt-3 text-2xl font-semibold text-slate-950">
-                3-Hour Placement Readiness Assessment
-              </h2>
-              <p className="mt-3 text-sm leading-6 text-slate-700">
-                Complete hard-level DSA, very hard scenario-based SQL, OOPs, and Core CS MCQs to
-                unlock your marks, capability, approach, risk, faculty insight, and company recommendation.
-              </p>
-              <dl className="mt-5 grid gap-3 text-sm sm:grid-cols-3">
-                <div className="rounded-[8px] bg-white p-3">
-                  <dt className="font-medium text-slate-500">Duration</dt>
-                  <dd className="mt-1 font-semibold text-slate-950">3 Hours</dd>
-                </div>
-                <div className="rounded-[8px] bg-white p-3">
-                  <dt className="font-medium text-slate-500">Sections</dt>
-                  <dd className="mt-1 font-semibold text-slate-950">4 Parts</dd>
-                </div>
-                <div className="rounded-[8px] bg-white p-3">
-                  <dt className="font-medium text-slate-500">Level</dt>
-                  <dd className="mt-1 font-semibold text-slate-950">Hard</dd>
-                </div>
-              </dl>
-              <div className="mt-4 grid gap-2 text-sm sm:grid-cols-2">
-                {["DSA: 90 min", "SQL: 30 min", "OOPs: 30 min", "Core CS: 30 min"].map((item) => (
-                  <div key={item} className="rounded-[8px] bg-white/75 px-3 py-2 font-medium text-slate-800">
-                    {item}
-                  </div>
-                ))}
-              </div>
-              <Link
-                href="/assessment/start"
-                className="mt-5 inline-flex h-11 items-center justify-center rounded-[8px] bg-emerald-700 px-5 text-sm font-semibold text-white hover:bg-emerald-800"
-              >
-                Start Test
-              </Link>
-            </article>
+            <AvailableAssessments assessments={availableAssessments} />
           </div>
         </section>
       </div>
@@ -249,6 +306,101 @@ export default async function DashboardPage() {
 
   if (!user) redirect("/login");
 
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", user.id)
+    .maybeSingle();
+
+  if (getAuthRole(user) === "admin" || normalizeRole(profile?.role) === "admin") {
+    redirect("/admin");
+  }
+
+  const serviceSupabase = supabaseService();
+  const { data: studentBatchRows, error: studentBatchError } = await serviceSupabase
+    .from("batch_students")
+    .select("batch_id")
+    .eq("student_id", user.id);
+
+  if (studentBatchError) {
+    throw new Error(`Could not load student batch assignments: ${studentBatchError.message}`);
+  }
+
+  const studentBatchIds = Array.from(
+    new Set((studentBatchRows || []).map((row) => row.batch_id).filter(Boolean)),
+  );
+  let availableAssessments: AvailableAssessment[] = [];
+
+  if (studentBatchIds.length > 0) {
+    const { data: assessmentBatchRows, error: assessmentBatchError } = await serviceSupabase
+      .from("assessment_batches")
+      .select("assessment_id")
+      .in("batch_id", studentBatchIds);
+
+    if (assessmentBatchError) {
+      throw new Error(`Could not load batch assessments: ${assessmentBatchError.message}`);
+    }
+
+    const assessmentIds = Array.from(
+      new Set((assessmentBatchRows || []).map((row) => row.assessment_id).filter(Boolean)),
+    );
+
+    if (assessmentIds.length > 0) {
+      const { data: availableAssessmentRows, error: availableAssessmentError } = await serviceSupabase
+        .from("assessments")
+        .select("id,title,description,duration_minutes,status")
+        .eq("status", "published")
+        .in("id", assessmentIds)
+        .order("created_at", { ascending: false });
+
+      if (availableAssessmentError) {
+        throw new Error(`Could not load available assessments: ${availableAssessmentError.message}`);
+      }
+
+      const { data: assessmentSubjectRows, error: assessmentSubjectError } = await serviceSupabase
+        .from("assessment_subjects")
+        .select("assessment_id,subject_id")
+        .in("assessment_id", assessmentIds);
+
+      if (assessmentSubjectError) {
+        throw new Error(`Could not load assessment subjects: ${assessmentSubjectError.message}`);
+      }
+
+      const subjectIds = Array.from(
+        new Set((assessmentSubjectRows || []).map((row) => row.subject_id).filter(Boolean)),
+      );
+      const { data: subjectRows, error: subjectError } = subjectIds.length > 0
+        ? await serviceSupabase.from("subjects").select("id,name,subject_type,duration_minutes").in("id", subjectIds)
+        : { data: [], error: null };
+
+      if (subjectError) {
+        throw new Error(`Could not load subjects: ${subjectError.message}`);
+      }
+
+      const subjectById = new Map(
+        (subjectRows || []).map((subject) => {
+          const typeLabel = subject.subject_type ? subjectTypeLabels[subject.subject_type] : null;
+          const durationLabel = subject.duration_minutes ? `${subject.duration_minutes} min` : null;
+          const label = [subject.name, typeLabel, durationLabel].filter(Boolean).join(" - ");
+          return [subject.id, label];
+        }),
+      );
+      const subjectsByAssessmentId = (assessmentSubjectRows || []).reduce<Map<string, string[]>>((map, row) => {
+        const subjectName = row.subject_id ? subjectById.get(row.subject_id) : null;
+        if (!row.assessment_id || !subjectName) return map;
+        const current = map.get(row.assessment_id) || [];
+        current.push(subjectName);
+        map.set(row.assessment_id, current);
+        return map;
+      }, new Map());
+
+      availableAssessments = (availableAssessmentRows || []).map((assessment) => ({
+        ...assessment,
+        subjects: subjectsByAssessmentId.get(assessment.id) || [],
+      })) as AvailableAssessment[];
+    }
+  }
+
   const { data: reports, error } = await supabase
     .from("student_assessment_reports")
     .select(
@@ -283,7 +435,7 @@ export default async function DashboardPage() {
   const [latestReport, ...previousReports] = (reports || []) as unknown as StudentAssessmentReportRow[];
 
   if (!latestReport) {
-    return <EmptyReportState email={user.email} />;
+    return <EmptyReportState email={user.email} availableAssessments={availableAssessments} />;
   }
 
   const marksScore = clampScore(latestReport.marks_score);
@@ -365,6 +517,14 @@ export default async function DashboardPage() {
               </div>
             </div>
           </div>
+        </section>
+
+        <section className="mt-6 rounded-[8px] border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-4">
+            <h3 className="font-semibold text-slate-950">Available Assessments</h3>
+            <p className="mt-1 text-sm text-slate-600">Published tests assigned to your batch.</p>
+          </div>
+          <AvailableAssessments assessments={availableAssessments} />
         </section>
 
         <section className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">

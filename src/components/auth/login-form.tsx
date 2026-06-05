@@ -51,8 +51,13 @@ export function LoginForm() {
 
       if (!response.ok) throw new Error("Could not persist session");
 
+      const next = getSafeNextPath(searchParams.get("next"), "");
+      const postLoginPath = next
+        ? `/auth/post-login?next=${encodeURIComponent(next)}`
+        : "/auth/post-login";
+
       toast.success("Signed in successfully");
-      router.replace(getSafeNextPath(searchParams.get("next")));
+      router.replace(postLoginPath);
       router.refresh();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Sign-in failed");
@@ -63,7 +68,7 @@ export function LoginForm() {
 
   const loginWithGoogle = async () => {
     const origin = window.location.origin;
-    const next = getSafeNextPath(searchParams.get("next"));
+    const next = getSafeNextPath(searchParams.get("next"), "/auth/post-login");
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {

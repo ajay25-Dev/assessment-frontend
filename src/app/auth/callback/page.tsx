@@ -40,7 +40,7 @@ function AuthCallbackBody() {
     const run = async () => {
       const supabase = supabaseBrowser();
       const code = searchParams.get("code");
-      const next = getSafeNextPath(searchParams.get("next"));
+      const next = getSafeNextPath(searchParams.get("next"), "/auth/post-login");
       const hashTokens = getHashSessionTokens();
 
       if (code) {
