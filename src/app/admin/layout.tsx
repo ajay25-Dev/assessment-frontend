@@ -2,6 +2,7 @@ import {
   BarChart3,
   Building2,
   ClipboardList,
+  FileJson,
   GraduationCap,
   Layers3,
   LibraryBig,
@@ -18,6 +19,7 @@ const navItems = [
   { href: "/admin/batches", label: "Batches", icon: Layers3 },
   { href: "/admin/subjects", label: "Subjects", icon: LibraryBig },
   { href: "/admin/assessments", label: "Assessments", icon: ClipboardList },
+  { href: "/admin/question-bank", label: "Question Bank", icon: FileJson },
 ];
 
 export default async function AdminLayout({ children }: { children: ReactNode }) {

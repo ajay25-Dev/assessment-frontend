@@ -15,7 +15,7 @@ export default async function LoginPage() {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (user) redirect("/dashboard");
+  if (user) redirect("/assessment/start");
 
   return (
     <main className="min-h-dvh bg-[linear-gradient(135deg,#f8fafc_0%,#ecfdf5_52%,#fefce8_100%)] px-4 py-10">

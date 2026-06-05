@@ -20,61 +20,61 @@ const sections = [
   {
     title: "DSA Coding",
     duration: "90 minutes",
-    focus: "Hard-level DSA",
-    difficulty: "ServiceNow, Commvault, Amazon, Autodesk-type level",
     icon: Code2,
   },
   {
     title: "SQL",
     duration: "30 minutes",
-    focus: "Scenario-based SQL queries",
-    difficulty: "Very hard",
     icon: Database,
   },
   {
     title: "OOPs",
     duration: "30 minutes",
-    focus: "Scenario-based OOPs questions",
-    difficulty: "Medium to hard",
     icon: Server,
   },
   {
     title: "Core CS MCQs",
     duration: "30 minutes",
-    focus: "CN, OS, Cloud, Security, Architecture, MS Office",
-    difficulty: "Scenario-based",
     icon: FileQuestion,
   },
 ];
 
 const dsaRules = [
-  "Each DSA question includes 5 open test cases.",
-  "Each DSA question includes 10-12 hidden test cases.",
+  "All 5 DSA questions are mandatory.",
+  "Each DSA question has 5 open and 10 hidden test cases.",
   "Strict execution time and memory limits apply.",
-  "Only 2-3 compilation attempts are allowed.",
-  "Unlimited run or compile is not available.",
+  "Run and submission activity is tracked.",
   "Code versions, submissions, and time taken per problem are tracked.",
 ];
 
 const sqlItems = [
-  "2 scenario-based SQL queries covering joins, grouping, filtering, and ranking.",
-  "1 business case SQL problem to test practical analytics thinking.",
-  "1 edge-case SQL problem involving NULLs, duplicates, or missing records.",
+  "3 scenario-based SQL questions from Amazon, Commvault, and Autodesk contexts.",
+  "Interactive PostgreSQL sandbox for running read-only queries.",
+  "Final SQL evaluation checks joins, CTEs, windows, NULLs, duplicates, and business rules.",
 ];
 
 const oopsItems = [
-  "8-10 scenario-based MCQs focused on best design or approach.",
-  "3-5 code-output questions covering inheritance, polymorphism, and abstraction.",
-  "1 design-based question for class design or system modelling.",
+  "3 scenario-based OOPs design questions.",
+  "Use the code editor to model classes, interfaces, and extensible designs.",
+  "Evaluation focuses on abstraction, encapsulation, polymorphism, SOLID, and error handling.",
 ];
 
-export default async function AssessmentStartPage() {
+type PageProps = {
+  searchParams?: Promise<{ assessmentId?: string }> | { assessmentId?: string };
+};
+
+export default async function AssessmentStartPage({ searchParams }: PageProps) {
+  const resolvedSearchParams = searchParams ? await searchParams : {};
+  const assessmentId = resolvedSearchParams.assessmentId;
   const supabase = await supabaseServer();
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) redirect("/login?next=/assessment/start");
+  if (!user) {
+    const next = assessmentId ? `/assessment/start?assessmentId=${assessmentId}` : "/assessment/start";
+    redirect(`/login?next=${encodeURIComponent(next)}`);
+  }
 
   return (
     <main className="min-h-dvh bg-[#f6f8f4]">
@@ -84,14 +84,13 @@ export default async function AssessmentStartPage() {
             <p className="text-sm font-semibold uppercase tracking-[0.18em] text-emerald-800">
               Jora Assessment
             </p>
-            <h1 className="mt-1 text-xl font-semibold text-slate-950">Test Instructions</h1>
+            <h1 className="mt-1 text-xl font-semibold text-slate-950">Assessment Welcome</h1>
           </div>
-          <Link
-            href="/dashboard"
-            className="rounded-[8px] border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50"
-          >
-            Back to Dashboard
-          </Link>
+          <form action="/api/auth/signout" method="post">
+            <button className="rounded-[8px] border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50">
+              Sign out
+            </button>
+          </form>
         </div>
       </div>
 
@@ -104,11 +103,11 @@ export default async function AssessmentStartPage() {
                 Test Duration: 3 Hours
               </div>
               <h2 className="mt-5 max-w-3xl text-3xl font-semibold leading-tight sm:text-4xl">
-                Read the full structure before starting the assessment.
+                Welcome to your JoraIQ college assessment.
               </h2>
               <p className="mt-4 max-w-2xl leading-7 text-emerald-50">
-                This test is designed for hard-level DSA, very hard scenario-based SQL, scenario-based
-                OOPs, and scenario-based Core CS MCQs. Direct theory questions are avoided.
+                Review the structure once, then continue into the 3-hour workspace for DSA, SQL,
+                OOPs, and Core CS MCQs.
               </p>
             </div>
             <div className="p-6 sm:p-8">
@@ -123,10 +122,10 @@ export default async function AssessmentStartPage() {
                 </p>
               </div>
               <Link
-                href="/assessment/test"
+                href={assessmentId ? `/assessment/test?assessmentId=${assessmentId}` : "/assessment/test"}
                 className="mt-5 inline-flex h-11 w-full items-center justify-center gap-2 rounded-[8px] bg-emerald-700 px-5 text-sm font-semibold text-white hover:bg-emerald-800"
               >
-                Begin Assessment
+                Continue to Assessment
                 <ArrowRight size={18} />
               </Link>
             </div>
@@ -147,14 +146,6 @@ export default async function AssessmentStartPage() {
                     <dt className="font-medium text-slate-500">Duration</dt>
                     <dd className="mt-1 text-slate-900">{section.duration}</dd>
                   </div>
-                  <div>
-                    <dt className="font-medium text-slate-500">Focus Area</dt>
-                    <dd className="mt-1 text-slate-900">{section.focus}</dd>
-                  </div>
-                  <div>
-                    <dt className="font-medium text-slate-500">Difficulty</dt>
-                    <dd className="mt-1 text-slate-900">{section.difficulty}</dd>
-                  </div>
                 </dl>
               </article>
             );
@@ -169,9 +160,9 @@ export default async function AssessmentStartPage() {
             </div>
             <div className="mt-5 grid gap-3 sm:grid-cols-3">
               {[
-                ["Hard DSA Problem 1", "Algorithmic thinking"],
-                ["Hard DSA Problem 2", "Optimization and edge cases"],
-                ["Debug/Optimize Code", "Interview-style reasoning"],
+                ["5 Mandatory Problems", "Graphs, shortest paths, hashing, versioning, sliding window"],
+                ["Open + Hidden Tests", "Visible confidence plus unseen robustness"],
+                ["Compiler Tracking", "Runs, submissions, timing, and output quality"],
               ].map(([title, purpose]) => (
                 <div key={title} className="rounded-[8px] bg-slate-50 p-4">
                   <p className="font-medium text-slate-950">{title}</p>

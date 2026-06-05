@@ -35,5 +35,5 @@ export default async function PostLoginPage({
     redirect("/admin");
   }
 
-  redirect(getSafeNextPath(pickParam(params, "next"), "/dashboard"));
+  redirect(getSafeNextPath(pickParam(params, "next"), "/assessment/start"));
 }

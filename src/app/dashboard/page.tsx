@@ -245,38 +245,6 @@ function AvailableAssessments({ assessments }: { assessments: AvailableAssessmen
   );
 }
 
-function EmptyReportState({
-  email,
-  availableAssessments,
-}: {
-  email?: string | null;
-  availableAssessments: AvailableAssessment[];
-}) {
-  return (
-    <main className="min-h-dvh bg-[#f6f8f4]">
-      <DashboardTopBar />
-      <div className="mx-auto max-w-5xl px-4 py-10 sm:px-6 lg:px-8">
-        <section className="rounded-[8px] border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
-          <div className="grid gap-6 lg:grid-cols-[0.9fr_1.1fr] lg:items-center">
-            <div>
-              <div className="flex h-12 w-12 items-center justify-center rounded-[8px] bg-emerald-50 text-emerald-800">
-                <BarChart3 size={22} />
-              </div>
-              <h1 className="mt-5 text-2xl font-semibold text-slate-950">No assessment report yet</h1>
-              <p className="mt-3 leading-7 text-slate-600">
-                No row was found in <span className="font-mono text-slate-800">student_assessment_reports</span>
-                {email ? ` for ${email}` : ""}. Start the available test to generate your first report.
-              </p>
-            </div>
-
-            <AvailableAssessments assessments={availableAssessments} />
-          </div>
-        </section>
-      </div>
-    </main>
-  );
-}
-
 function DashboardTopBar() {
   return (
     <div className="border-b border-slate-200 bg-white">
@@ -434,9 +402,7 @@ export default async function DashboardPage() {
 
   const [latestReport, ...previousReports] = (reports || []) as unknown as StudentAssessmentReportRow[];
 
-  if (!latestReport) {
-    return <EmptyReportState email={user.email} availableAssessments={availableAssessments} />;
-  }
+  if (!latestReport) redirect("/assessment/start");
 
   const marksScore = clampScore(latestReport.marks_score);
   const bruteForceRisk = normalizeRisk(latestReport.brute_force_risk);
