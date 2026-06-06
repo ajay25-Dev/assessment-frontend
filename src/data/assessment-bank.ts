@@ -23,18 +23,21 @@ export type AssessmentQuestion = {
   test_cases?: Array<{
     number: number;
     input: string;
+    expected?: string;
     expected_output: string;
     purpose: string;
   }>;
   open_test_cases?: Array<{
     number: number;
     input: string;
+    expected?: string;
     expected_output: string;
     purpose: string;
   }>;
   hidden_test_cases?: Array<{
     number: number;
     input: string;
+    expected?: string;
     expected_output: string;
     purpose: string;
   }>;

@@ -85,7 +85,7 @@ function visibleTestResultsForQuestion(question: AssessmentQuestion): TestResult
     test_results: cases.map((testCase, index) => ({
       number: Number(testCase.number || index + 1),
       input: String(testCase.input || ""),
-      expected: String(testCase.expected_output || ""),
+      expected: String(testCase.expected_output || testCase.expected || ""),
       actual: "Run did not return structured per-case output.",
       passed: false,
       purpose: String(testCase.purpose || "Visible test case"),
@@ -351,7 +351,6 @@ export function AssessmentShell({
       const compileOutput = payload?.compile_output || "";
       const status = payload?.status?.description || "Completed";
       const time = payload?.time || "";
-      const memory = payload?.memory || "";
       const isError = payload?.status?.id === 6 || payload?.status?.id === 11;
 
       // Prefer backend-parsed structured test results, then fall back to stdout markers.
@@ -396,7 +395,6 @@ export function AssessmentShell({
         const resultLines = [
           isError ? `Compiler status: ${status}` : `Compiler status: ${status || "Completed"}`,
           time ? `Runtime: ${time}s` : null,
-          memory ? `Memory: ${memory} KB` : null,
           compileOutput ? `Compile output:\n${compileOutput}` : null,
           stdout ? `Stdout:\n${stdout}` : null,
           stderr ? `Stderr:\n${stderr}` : null,
