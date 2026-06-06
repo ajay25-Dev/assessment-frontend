@@ -2,6 +2,7 @@ import {
   BarChart3,
   Building2,
   ClipboardList,
+  FileText,
   FileJson,
   GraduationCap,
   Layers3,
@@ -19,6 +20,7 @@ const navItems = [
   { href: "/admin/batches", label: "Batches", icon: Layers3 },
   { href: "/admin/subjects", label: "Subjects", icon: LibraryBig },
   { href: "/admin/assessments", label: "Assessments", icon: ClipboardList },
+  { href: "/admin/reports", label: "Reports", icon: FileText },
   { href: "/admin/question-bank", label: "Question Bank", icon: FileJson },
 ];
 
