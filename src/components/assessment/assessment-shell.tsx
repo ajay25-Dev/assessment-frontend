@@ -45,6 +45,7 @@ type CompilerResponse = {
   message?: string | null;
   time?: string | null;
   memory?: number | null;
+  test_results?: TestResultsOutput | null;
 };
 
 type TestResult = {
@@ -54,6 +55,7 @@ type TestResult = {
   actual: string;
   passed: boolean;
   purpose: string;
+  displayStatus?: "visible" | "executed";
 };
 
 type TestResultsOutput = {
@@ -72,6 +74,25 @@ type SqlRunResponse = {
   error?: string;
   message?: string;
 };
+
+function visibleTestResultsForQuestion(question: AssessmentQuestion): TestResultsOutput | null {
+  const cases = question.open_test_cases?.length ? question.open_test_cases : question.test_cases?.slice(0, 5) || [];
+  if (!cases.length) return null;
+
+  return {
+    total: cases.length,
+    passed: 0,
+    test_results: cases.map((testCase, index) => ({
+      number: Number(testCase.number || index + 1),
+      input: String(testCase.input || ""),
+      expected: String(testCase.expected_output || ""),
+      actual: "Run did not return structured per-case output.",
+      passed: false,
+      purpose: String(testCase.purpose || "Visible test case"),
+      displayStatus: "visible",
+    })),
+  };
+}
 
 function initialAnswer(question: AssessmentQuestion): AnswerState {
   const language = question.engine === "sql" ? "sql" : question.allowed_languages?.[0] || defaultLanguage;
@@ -299,7 +320,8 @@ export function AssessmentShell({
     if (isExecuting || remainingSeconds === 0) return;
 
     setIsExecuting(true);
-    setTestResults(null);
+    const visibleFallback = visibleTestResultsForQuestion(activeQuestion);
+    setTestResults(visibleFallback);
     setAnimatingTestIndex(-1);
     updateActiveAnswer({
       resultMessage: `${action === "run" ? "Running test cases" : "Submitting for evaluation"}...`,
@@ -332,14 +354,14 @@ export function AssessmentShell({
       const memory = payload?.memory || "";
       const isError = payload?.status?.id === 6 || payload?.status?.id === 11;
 
-      // Try to parse structured test results from stdout
-      let parsedTestResults: TestResultsOutput | null = null;
+      // Prefer backend-parsed structured test results, then fall back to stdout markers.
+      let parsedTestResults: TestResultsOutput | null = payload?.test_results || null;
       const testStartMarker = "===TEST_RESULTS_START===";
       const testEndMarker = "===TEST_RESULTS_END===";
       const testStartIdx = stdout.indexOf(testStartMarker);
       const testEndIdx = stdout.indexOf(testEndMarker);
 
-      if (testStartIdx >= 0 && testEndIdx > testStartIdx) {
+      if (!parsedTestResults && testStartIdx >= 0 && testEndIdx > testStartIdx) {
         const jsonStr = stdout.substring(testStartIdx + testStartMarker.length, testEndIdx).trim();
         try {
           parsedTestResults = JSON.parse(jsonStr) as TestResultsOutput;
@@ -367,6 +389,9 @@ export function AssessmentShell({
           resultMessage: `Test results: ${passed}/${totalTests} passed (${Math.round((passed / totalTests) * 100)}%)`,
         });
       } else {
+        if (visibleFallback) {
+          setTestResults(visibleFallback);
+        }
         // No structured results - fall back to raw output display
         const resultLines = [
           isError ? `Compiler status: ${status}` : `Compiler status: ${status || "Completed"}`,
@@ -977,23 +1002,24 @@ function TestResultsPanel({
 }) {
   const { test_results, total, passed } = testResults;
   const allVisible = animatingIndex < 0;
+  const visibleOnly = test_results.every((test) => test.displayStatus === "visible");
 
   return (
     <div className="rounded-[8px] border border-slate-200 bg-white overflow-hidden">
       <div className="border-b border-slate-200 bg-slate-50 px-3 py-2 flex items-center justify-between">
         <span className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
-          Test Results
+          {visibleOnly ? "Visible Test Cases" : "Test Results"}
         </span>
-        <span className={`text-xs font-semibold ${passed === total ? "text-emerald-700" : passed >= total / 2 ? "text-amber-700" : "text-red-700"}`}>
-          {passed}/{total} passed
+        <span className={`text-xs font-semibold ${visibleOnly ? "text-slate-600" : passed === total ? "text-emerald-700" : passed >= total / 2 ? "text-amber-700" : "text-red-700"}`}>
+          {visibleOnly ? `${total} visible` : `${passed}/${total} passed`}
         </span>
       </div>
 
       {/* Progress bar */}
       <div className="h-1.5 bg-slate-100">
         <div
-          className="h-full bg-emerald-600 transition-all duration-300"
-          style={{ width: `${(passed / total) * 100}%` }}
+          className={`h-full transition-all duration-300 ${visibleOnly ? "bg-slate-400" : "bg-emerald-600"}`}
+          style={{ width: `${visibleOnly ? 100 : (passed / total) * 100}%` }}
         />
       </div>
 
@@ -1007,7 +1033,7 @@ function TestResultsPanel({
               key={test.number}
               className={`grid grid-cols-[36px_1fr_1fr_1fr_64px] gap-2 px-3 py-2 text-xs transition-all duration-200 ${
                 isVisible ? "opacity-100" : "opacity-0"
-              } ${isCurrentAnimating ? "bg-amber-50" : test.passed ? "bg-emerald-50/30" : "bg-red-50/30"}`}
+              } ${isCurrentAnimating ? "bg-amber-50" : test.displayStatus === "visible" ? "bg-slate-50" : test.passed ? "bg-emerald-50/30" : "bg-red-50/30"}`}
             >
               <span className="font-semibold text-slate-600 flex items-center">
                 {test.number}
@@ -1022,12 +1048,16 @@ function TestResultsPanel({
               </div>
               <div className="truncate" title={test.actual}>
                 <span className="text-slate-500">Actual: </span>
-                <code className={`font-mono ${test.passed ? "text-emerald-700" : "text-red-700"}`}>
+                <code className={`font-mono ${test.displayStatus === "visible" ? "text-slate-600" : test.passed ? "text-emerald-700" : "text-red-700"}`}>
                   {test.actual.length > 25 ? test.actual.substring(0, 25) + "..." : test.actual}
                 </code>
               </div>
               <div className="flex items-center justify-end">
-                {test.passed ? (
+                {test.displayStatus === "visible" ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-slate-200 px-2 py-0.5 text-slate-700 font-semibold">
+                    VISIBLE
+                  </span>
+                ) : test.passed ? (
                   <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-800 font-semibold">
                     PASS
                   </span>

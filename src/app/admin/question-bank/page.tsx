@@ -72,7 +72,7 @@ export default async function QuestionBankPage() {
         <div className="border-b border-slate-200 px-5 py-4">
           <h3 className="font-semibold text-slate-950">Import Preview</h3>
           <p className="mt-1 text-sm text-slate-600">
-            Source: <span className="font-mono">assessment-data/joraiq-question-bank.json</span>
+            Source: <span className="font-mono">assessment-backend/src/question-bank/data/joraiq-question-bank.json</span>
           </p>
         </div>
         <div className="overflow-x-auto">

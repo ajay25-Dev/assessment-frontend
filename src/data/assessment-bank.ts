@@ -26,6 +26,18 @@ export type AssessmentQuestion = {
     expected_output: string;
     purpose: string;
   }>;
+  open_test_cases?: Array<{
+    number: number;
+    input: string;
+    expected_output: string;
+    purpose: string;
+  }>;
+  hidden_test_cases?: Array<{
+    number: number;
+    input: string;
+    expected_output: string;
+    purpose: string;
+  }>;
   allowed_languages?: string[];
   starter_code?: Record<string, string>;
   dialect?: string;
