@@ -38,13 +38,28 @@ type AnswerState = {
 type ActiveTab = "problem" | "answer" | "results";
 
 type CompilerResponse = {
-  status?: { description?: string };
+  status?: { id?: number; description?: string };
   stdout?: string | null;
   stderr?: string | null;
   compile_output?: string | null;
   message?: string | null;
   time?: string | null;
   memory?: number | null;
+};
+
+type TestResult = {
+  number: number;
+  input: string;
+  expected: string;
+  actual: string;
+  passed: boolean;
+  purpose: string;
+};
+
+type TestResultsOutput = {
+  test_results: TestResult[];
+  total: number;
+  passed: number;
 };
 
 const defaultLanguage = "python";
@@ -166,6 +181,8 @@ export function AssessmentShell({
   const [isExecuting, setIsExecuting] = useState(false);
   const [isFinalizing, setIsFinalizing] = useState(false);
   const [sqlResult, setSqlResult] = useState<SqlRunResponse | null>(null);
+  const [testResults, setTestResults] = useState<TestResultsOutput | null>(null);
+  const [animatingTestIndex, setAnimatingTestIndex] = useState<number>(-1);
 
   const activeIndex = questions.findIndex((question) => question.id === activeQuestionId);
   const activeQuestion = questions[Math.max(0, activeIndex)];
@@ -282,8 +299,10 @@ export function AssessmentShell({
     if (isExecuting || remainingSeconds === 0) return;
 
     setIsExecuting(true);
+    setTestResults(null);
+    setAnimatingTestIndex(-1);
     updateActiveAnswer({
-      resultMessage: `${action === "run" ? "Running visible tests" : "Submitting to compiler"}...`,
+      resultMessage: `${action === "run" ? "Running test cases" : "Submitting for evaluation"}...`,
     });
     setActiveTab("results");
 
@@ -305,29 +324,66 @@ export function AssessmentShell({
         throw new Error(payload?.message || `Compiler request failed with status ${response.status}`);
       }
 
-      const status = payload?.status?.description || "Completed";
       const stdout = payload?.stdout || "";
       const stderr = payload?.stderr || "";
       const compileOutput = payload?.compile_output || "";
-      const message = payload?.message || "";
+      const status = payload?.status?.description || "Completed";
       const time = payload?.time || "";
       const memory = payload?.memory || "";
-      const resultLines = [
-        `Compiler status: ${status || "Completed"}`,
-        time ? `Runtime: ${time}s` : null,
-        memory ? `Memory: ${memory} KB` : null,
-        compileOutput ? `Compile output:\n${compileOutput}` : null,
-        stdout ? `Stdout:\n${stdout}` : null,
-        stderr ? `Stderr:\n${stderr}` : null,
-        message ? `Message:\n${message}` : null,
-      ].filter(Boolean);
+      const isError = payload?.status?.id === 6 || payload?.status?.id === 11;
 
-      updateActiveAnswer({
-        runs: action === "run" ? activeAnswer.runs + 1 : activeAnswer.runs,
-        submissions: action === "submit" ? activeAnswer.submissions + 1 : activeAnswer.submissions,
-        status: action === "submit" ? "submitted" : "ran",
-        resultMessage: resultLines.join("\n\n") || "Compiler completed with no output.",
-      });
+      // Try to parse structured test results from stdout
+      let parsedTestResults: TestResultsOutput | null = null;
+      const testStartMarker = "===TEST_RESULTS_START===";
+      const testEndMarker = "===TEST_RESULTS_END===";
+      const testStartIdx = stdout.indexOf(testStartMarker);
+      const testEndIdx = stdout.indexOf(testEndMarker);
+
+      if (testStartIdx >= 0 && testEndIdx > testStartIdx) {
+        const jsonStr = stdout.substring(testStartIdx + testStartMarker.length, testEndIdx).trim();
+        try {
+          parsedTestResults = JSON.parse(jsonStr) as TestResultsOutput;
+        } catch {
+          // Not valid JSON - fall through
+        }
+      }
+
+      if (parsedTestResults && parsedTestResults.test_results?.length > 0) {
+        // Animate test results one by one
+        setTestResults(parsedTestResults);
+        const total = parsedTestResults.test_results.length;
+        for (let i = 0; i < total; i++) {
+          setAnimatingTestIndex(i);
+          await new Promise((r) => setTimeout(r, 150));
+        }
+        setAnimatingTestIndex(-1);
+
+        const passed = parsedTestResults.passed;
+        const totalTests = parsedTestResults.total;
+        updateActiveAnswer({
+          runs: action === "run" ? activeAnswer.runs + 1 : activeAnswer.runs,
+          submissions: action === "submit" ? activeAnswer.submissions + 1 : activeAnswer.submissions,
+          status: action === "submit" ? "submitted" : "ran",
+          resultMessage: `Test results: ${passed}/${totalTests} passed (${Math.round((passed / totalTests) * 100)}%)`,
+        });
+      } else {
+        // No structured results - fall back to raw output display
+        const resultLines = [
+          isError ? `Compiler status: ${status}` : `Compiler status: ${status || "Completed"}`,
+          time ? `Runtime: ${time}s` : null,
+          memory ? `Memory: ${memory} KB` : null,
+          compileOutput ? `Compile output:\n${compileOutput}` : null,
+          stdout ? `Stdout:\n${stdout}` : null,
+          stderr ? `Stderr:\n${stderr}` : null,
+        ].filter(Boolean);
+
+        updateActiveAnswer({
+          runs: action === "run" ? activeAnswer.runs + 1 : activeAnswer.runs,
+          submissions: action === "submit" ? activeAnswer.submissions + 1 : activeAnswer.submissions,
+          status: action === "submit" ? "submitted" : "ran",
+          resultMessage: resultLines.join("\n\n") || "Compiler completed with no output.",
+        });
+      }
     } catch (error) {
       updateActiveAnswer({
         runs: action === "run" ? activeAnswer.runs + 1 : activeAnswer.runs,
@@ -663,7 +719,13 @@ export function AssessmentShell({
           </div>
 
           <div className={`${activeTab === "results" ? "block" : "hidden"} border-t border-slate-200 bg-white p-3 lg:block sm:p-4`}>
-            <div className="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-center">
+            <div className="grid gap-3">
+              {testResults && activeQuestion.engine === "code" ? (
+                <TestResultsPanel
+                  testResults={testResults}
+                  animatingIndex={animatingTestIndex}
+                />
+              ) : null}
               <div className="rounded-[8px] border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-700">
                 {activeAnswer.resultMessage}
               </div>
@@ -903,6 +965,98 @@ function QuestionPrompt({ question, visible }: { question: AssessmentQuestion; v
         </div>
       ) : null}
     </article>
+  );
+}
+
+function TestResultsPanel({
+  testResults,
+  animatingIndex,
+}: {
+  testResults: TestResultsOutput;
+  animatingIndex: number;
+}) {
+  const { test_results, total, passed } = testResults;
+  const allVisible = animatingIndex < 0;
+
+  return (
+    <div className="rounded-[8px] border border-slate-200 bg-white overflow-hidden">
+      <div className="border-b border-slate-200 bg-slate-50 px-3 py-2 flex items-center justify-between">
+        <span className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+          Test Results
+        </span>
+        <span className={`text-xs font-semibold ${passed === total ? "text-emerald-700" : passed >= total / 2 ? "text-amber-700" : "text-red-700"}`}>
+          {passed}/{total} passed
+        </span>
+      </div>
+
+      {/* Progress bar */}
+      <div className="h-1.5 bg-slate-100">
+        <div
+          className="h-full bg-emerald-600 transition-all duration-300"
+          style={{ width: `${(passed / total) * 100}%` }}
+        />
+      </div>
+
+      <div className="max-h-64 overflow-auto divide-y divide-slate-100">
+        {test_results.map((test, index) => {
+          const isVisible = allVisible || index <= animatingIndex;
+          const isCurrentAnimating = index === animatingIndex && !allVisible;
+
+          return (
+            <div
+              key={test.number}
+              className={`grid grid-cols-[36px_1fr_1fr_1fr_64px] gap-2 px-3 py-2 text-xs transition-all duration-200 ${
+                isVisible ? "opacity-100" : "opacity-0"
+              } ${isCurrentAnimating ? "bg-amber-50" : test.passed ? "bg-emerald-50/30" : "bg-red-50/30"}`}
+            >
+              <span className="font-semibold text-slate-600 flex items-center">
+                {test.number}
+              </span>
+              <div className="truncate" title={test.input}>
+                <span className="text-slate-500">Input: </span>
+                <code className="font-mono text-slate-800">{test.input.length > 30 ? test.input.substring(0, 30) + "..." : test.input}</code>
+              </div>
+              <div className="truncate" title={test.expected}>
+                <span className="text-slate-500">Expected: </span>
+                <code className="font-mono text-slate-800">{test.expected.length > 25 ? test.expected.substring(0, 25) + "..." : test.expected}</code>
+              </div>
+              <div className="truncate" title={test.actual}>
+                <span className="text-slate-500">Actual: </span>
+                <code className={`font-mono ${test.passed ? "text-emerald-700" : "text-red-700"}`}>
+                  {test.actual.length > 25 ? test.actual.substring(0, 25) + "..." : test.actual}
+                </code>
+              </div>
+              <div className="flex items-center justify-end">
+                {test.passed ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-800 font-semibold">
+                    PASS
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-red-800 font-semibold">
+                    FAIL
+                  </span>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {test_results.some((t) => t.purpose) ? (
+        <div className="border-t border-slate-200 bg-slate-50 px-3 py-2">
+          <details className="text-xs">
+            <summary className="cursor-pointer font-medium text-slate-600">View test case descriptions</summary>
+            <div className="mt-2 space-y-1">
+              {test_results.map((test) => (
+                <div key={test.number} className="text-slate-500">
+                  <span className="font-medium text-slate-700">#{test.number}:</span> {test.purpose}
+                </div>
+              ))}
+            </div>
+          </details>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
