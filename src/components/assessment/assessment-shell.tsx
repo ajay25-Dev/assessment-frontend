@@ -317,7 +317,7 @@ export function AssessmentShell({
   }
 
   async function executeCode(action: "run" | "submit") {
-    if (isExecuting || remainingSeconds === 0) return;
+    if (isExecuting) return;
 
     setIsExecuting(true);
     const visibleFallback = visibleTestResultsForQuestion(activeQuestion);
@@ -420,7 +420,7 @@ export function AssessmentShell({
   }
 
   async function executeSql(action: "run" | "submit") {
-    if (isExecuting || remainingSeconds === 0) return;
+    if (isExecuting) return;
 
     setIsExecuting(true);
     updateActiveAnswer({
@@ -469,9 +469,9 @@ export function AssessmentShell({
   }
 
   function runQuestion() {
-    if (isExecuting || remainingSeconds === 0) {
+    if (isExecuting) {
       updateActiveAnswer({
-        resultMessage: remainingSeconds === 0 ? "Time expired. Run is disabled." : "A compiler request is already running.",
+        resultMessage: "A compiler request is already running.",
       });
       setActiveTab("results");
       return;
@@ -496,9 +496,9 @@ export function AssessmentShell({
   }
 
   function submitQuestion() {
-    if (isExecuting || remainingSeconds === 0) {
+    if (isExecuting) {
       updateActiveAnswer({
-        resultMessage: remainingSeconds === 0 ? "Time expired. Submit is disabled." : "A compiler request is already running.",
+        resultMessage: "A compiler request is already running.",
       });
       setActiveTab("results");
       return;
@@ -801,7 +801,7 @@ export function AssessmentShell({
                 <button
                   type="button"
                   onClick={runQuestion}
-                  disabled={isExecuting || isTimedOut}
+                  disabled={isExecuting}
                   className="inline-flex h-10 items-center gap-2 rounded-[8px] border border-slate-300 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
                 >
                   <Play size={16} />
@@ -810,7 +810,7 @@ export function AssessmentShell({
                 <button
                   type="button"
                   onClick={submitQuestion}
-                  disabled={isExecuting || isTimedOut}
+                  disabled={isExecuting}
                   className="inline-flex h-10 items-center gap-2 rounded-[8px] bg-emerald-700 px-3 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-40"
                 >
                   <CheckCircle2 size={16} />
