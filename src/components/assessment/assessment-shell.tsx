@@ -77,7 +77,7 @@ const defaultSectionDurations: Record<AssessmentSectionId, number> = {
   MCQ: 30,
 };
 
-type SectionStatus = "active" | "completed" | "locked";
+type SectionStatus = "active" | "completed" | "unlocked";
 
 type SqlRunResponse = {
   columns?: string[];
@@ -276,6 +276,7 @@ function loadSavedSnapshot(assessmentBank: AssessmentBank, assessmentInstanceId?
     const parsed = JSON.parse(saved) as {
       answers?: Record<string, AnswerState>;
       activeQuestionId?: string;
+      activeSection?: AssessmentSectionId;
       startedAt?: string;
       tabEvents?: number;
       cameraEvents?: number;
@@ -283,15 +284,14 @@ function loadSavedSnapshot(assessmentBank: AssessmentBank, assessmentInstanceId?
     const startedAt = parsed.startedAt || window.localStorage.getItem(`${storageKey}:startedAt`);
     const elapsed = startedAt ? Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000) : 0;
     const timing = sectionTimingForElapsed(assessmentBank, elapsed);
-    const savedActiveQuestionIsCurrentSection =
-      parsed.activeQuestionId &&
-      questions.some((question) => question.id === parsed.activeQuestionId && question.section === timing.activeSection);
+    const savedActiveQuestion = parsed.activeQuestionId
+      ? questions.find((question) => question.id === parsed.activeQuestionId)
+      : null;
+    const activeSection = savedActiveQuestion?.section || parsed.activeSection || timing.activeSection;
     return {
-      activeQuestionId: savedActiveQuestionIsCurrentSection
-        ? parsed.activeQuestionId || fallback.activeQuestionId
-        : firstQuestionInSection(questions, timing.activeSection),
+      activeQuestionId: savedActiveQuestion?.id || firstQuestionInSection(questions, activeSection),
       answers: { ...fallback.answers, ...(parsed.answers || {}) },
-      activeSection: timing.activeSection,
+      activeSection,
       sectionRemainingSeconds: timing.sectionRemainingSeconds,
       remainingSeconds: timing.totalRemainingSeconds,
       tabEvents: parsed.tabEvents || 0,
@@ -394,25 +394,21 @@ export function AssessmentShell({
     [assessmentBank.assessment.sections, questions],
   );
 
-  const currentSectionQuestions = useMemo(
-    () => questions.filter((question) => question.section === activeSection),
-    [activeSection, questions],
-  );
-
-  const activeSectionIndex = sectionOrder.indexOf(activeSection);
   const sectionStatuses = useMemo(
     () =>
       Object.fromEntries(
-        sectionOrder.map((section, index) => [
+        sectionOrder.map((section) => [
           section,
-          index < activeSectionIndex
-            ? "completed"
-            : index === activeSectionIndex
-              ? "active"
-              : "locked",
+          section === activeSection
+            ? "active"
+            : questions
+                .filter((question) => question.section === section)
+                .every((question) => answers[question.id]?.status === "submitted")
+              ? "completed"
+              : "unlocked",
         ]),
       ) as Record<AssessmentSectionId, SectionStatus>,
-    [activeSectionIndex],
+    [activeSection, answers, questions],
   );
 
   useEffect(() => {
@@ -427,23 +423,6 @@ export function AssessmentShell({
       const elapsed = startedAt ? Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000) : 0;
       const timing = sectionTimingForElapsed(assessmentBank, elapsed);
 
-      setActiveSection((currentSection) => {
-        if (currentSection !== timing.activeSection) {
-          setAnswers((answersCurrent) =>
-            Object.fromEntries(
-              Object.entries(answersCurrent).map(([questionId, answer]) => [
-                questionId,
-                { ...answer, status: answer.status === "unvisited" ? "saved" : answer.status },
-              ]),
-            ),
-          );
-          setActiveQuestionId(firstQuestionInSection(questions, timing.activeSection));
-          setActiveTab("answer");
-          setSqlResult(null);
-          setTestResults(null);
-        }
-        return timing.activeSection;
-      });
       setSectionRemainingSeconds(timing.sectionRemainingSeconds);
       setRemainingSeconds(timing.totalRemainingSeconds);
     }, 1000);
@@ -606,8 +585,9 @@ export function AssessmentShell({
 
   function changeQuestion(questionId: string) {
     const targetQuestion = questions.find((question) => question.id === questionId);
-    if (!targetQuestion || targetQuestion.section !== activeSection) return;
+    if (!targetQuestion) return;
 
+    setActiveSection(targetQuestion.section);
     setActiveQuestionId(questionId);
     setActiveTab("answer");
     setNavOpen(false);
@@ -1049,10 +1029,9 @@ export function AssessmentShell({
   const marked = Object.values(answers).filter((answer) => answer.marked).length;
   const isTimedOut = remainingSeconds === 0;
   const isSectionTimedOut = sectionRemainingSeconds === 0;
-  const activeIndexInSection = currentSectionQuestions.findIndex((question) => question.id === activeQuestion.id);
-  const previousQuestion = activeIndexInSection > 0 ? currentSectionQuestions[activeIndexInSection - 1] : null;
-  const nextQuestion = activeIndexInSection >= 0 && activeIndexInSection < currentSectionQuestions.length - 1
-    ? currentSectionQuestions[activeIndexInSection + 1]
+  const previousQuestion = activeIndex > 0 ? questions[activeIndex - 1] : null;
+  const nextQuestion = activeIndex >= 0 && activeIndex < questions.length - 1
+    ? questions[activeIndex + 1]
     : null;
   return (
     <main className="flex min-h-dvh flex-col bg-[radial-gradient(circle_at_top_left,#e7fff4_0,#f7faf8_30%,#eef3f0_100%)] text-slate-950">
@@ -1135,7 +1114,7 @@ export function AssessmentShell({
                     ? "border-emerald-300 bg-white shadow-sm ring-1 ring-emerald-100"
                     : status === "completed"
                       ? "border-slate-200 bg-white"
-                      : "border-slate-100 bg-white/60 opacity-70"
+                      : "border-slate-200 bg-white"
                 }`}
               >
                 {status === "active" ? <div className="absolute inset-x-0 top-0 h-0.5 bg-emerald-600" /> : null}
@@ -1143,7 +1122,7 @@ export function AssessmentShell({
                   <span className="flex items-center gap-2 font-semibold text-slate-800">
                     <Icon size={15} className={status === "active" ? "text-emerald-700" : "text-slate-500"} />
                     <span>{section}</span>
-                    {status === "active" ? " - Active" : status === "completed" ? " - Completed" : " - Locked"}
+                    {status === "active" ? " - Active" : status === "completed" ? " - Completed" : " - Unlocked"}
                   </span>
                   <span className="text-slate-500">{done}/{sectionQuestions.length}</span>
                 </div>
@@ -1467,27 +1446,25 @@ function QuestionNavigator({
         const Icon = sectionIcon(section);
         const sectionQuestions = assessmentBank.questions.filter((question) => question.section === section);
         const sectionStatus = sectionStatuses[section];
-        const isSelectableSection = section === activeSection;
         return (
-          <div key={section} className={isSelectableSection ? "" : "opacity-60"}>
+          <div key={section}>
             <div className="mb-2 flex items-center justify-between gap-2 text-sm font-semibold text-slate-900">
               <span className="flex items-center gap-2">
               <Icon size={17} />
               {section}
               </span>
               <span className="text-xs font-medium text-slate-500">
-                {sectionStatus === "active" ? "Active" : sectionStatus === "completed" ? "Locked" : "Locked"}
+                {sectionStatus === "active" ? "Active" : sectionStatus === "completed" ? "Completed" : "Unlocked"}
               </span>
             </div>
             <div className="grid gap-2">
               {sectionQuestions.map((question, index) => {
                 const answer = answers[question.id] || initialAnswer(question);
-                const isDisabled = disabled || !isSelectableSection;
                 return (
                   <button
                     key={question.id}
                     type="button"
-                    disabled={isDisabled}
+                    disabled={disabled}
                     onClick={() => onSelect(question.id)}
                     className={`grid grid-cols-[32px_1fr_auto] items-center gap-2 rounded-[8px] border px-2 py-2 text-left text-sm ${
                       activeQuestionId === question.id ? "border-emerald-400 bg-emerald-50" : "border-slate-200 bg-white hover:bg-slate-50"
@@ -1609,7 +1586,68 @@ function QuestionPrompt({ question, visible }: { question: AssessmentQuestion; v
           </div>
         </div>
       ) : null}
+
+      {question.engine === "sql" ? <SampleInputData question={question} /> : null}
     </article>
+  );
+}
+
+function SampleInputData({ question }: { question: AssessmentQuestion }) {
+  if (question.sample_data_tables?.length) {
+    return (
+      <div className="mt-4 rounded-[12px] border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-100 px-3 py-2">
+          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Sample Input Data</p>
+        </div>
+        <div className="grid gap-4 p-3">
+          {question.sample_data_tables.map((table) => (
+            <div key={table.name} className="overflow-hidden rounded-[10px] border border-slate-200">
+              <div className="flex items-center justify-between gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2">
+                <h3 className="font-mono text-sm font-semibold text-slate-900">{table.name}</h3>
+                <span className="text-xs text-slate-500">{table.rows.length} rows</span>
+              </div>
+              <div className="overflow-auto">
+                <table className="min-w-full border-collapse text-left text-xs">
+                  <thead className="bg-slate-100 text-slate-600">
+                    <tr>
+                      {(table.columns.length ? table.columns : table.rows[0]?.map((_, index) => `column_${index + 1}`) || []).map((column) => (
+                        <th key={column} className="whitespace-nowrap border-b border-slate-200 px-3 py-2 font-mono font-semibold">
+                          {column}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 bg-white">
+                    {table.rows.map((row, rowIndex) => (
+                      <tr key={`${table.name}-${rowIndex}`} className="hover:bg-slate-50">
+                        {row.map((value, valueIndex) => (
+                          <td key={`${table.name}-${rowIndex}-${valueIndex}`} className="max-w-64 whitespace-nowrap px-3 py-2 font-mono text-slate-700">
+                            {value}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (!question.sample_data_sql) return null;
+
+  return (
+    <div className="mt-4 overflow-hidden rounded-[12px] border border-slate-200 bg-slate-950 shadow-sm">
+      <div className="border-b border-slate-800 px-3 py-2">
+        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-300">Sample Input Data</p>
+      </div>
+      <pre className="max-h-80 overflow-auto p-3 font-mono text-xs leading-6 text-slate-100">
+        {question.sample_data_sql}
+      </pre>
+    </div>
   );
 }
 

@@ -987,7 +987,68 @@ function QuestionPrompt({ question, visible }: { question: AssessmentQuestion; v
           </div>
         </div>
       ) : null}
+
+      {question.engine === "sql" ? <SampleInputData question={question} /> : null}
     </article>
+  );
+}
+
+function SampleInputData({ question }: { question: AssessmentQuestion }) {
+  if (question.sample_data_tables?.length) {
+    return (
+      <div className="mt-4 rounded-[8px] border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-100 px-3 py-2">
+          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Sample Input Data</p>
+        </div>
+        <div className="grid gap-4 p-3">
+          {question.sample_data_tables.map((table) => (
+            <div key={table.name} className="overflow-hidden rounded-[8px] border border-slate-200">
+              <div className="flex items-center justify-between gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2">
+                <h3 className="font-mono text-sm font-semibold text-slate-900">{table.name}</h3>
+                <span className="text-xs text-slate-500">{table.rows.length} rows</span>
+              </div>
+              <div className="overflow-auto">
+                <table className="min-w-full border-collapse text-left text-xs">
+                  <thead className="bg-slate-100 text-slate-600">
+                    <tr>
+                      {(table.columns.length ? table.columns : table.rows[0]?.map((_, index) => `column_${index + 1}`) || []).map((column) => (
+                        <th key={column} className="whitespace-nowrap border-b border-slate-200 px-3 py-2 font-mono font-semibold">
+                          {column}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 bg-white">
+                    {table.rows.map((row, rowIndex) => (
+                      <tr key={`${table.name}-${rowIndex}`} className="hover:bg-slate-50">
+                        {row.map((value, valueIndex) => (
+                          <td key={`${table.name}-${rowIndex}-${valueIndex}`} className="max-w-64 whitespace-nowrap px-3 py-2 font-mono text-slate-700">
+                            {value}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (!question.sample_data_sql) return null;
+
+  return (
+    <div className="mt-4 overflow-hidden rounded-[8px] border border-slate-200 bg-slate-950 shadow-sm">
+      <div className="border-b border-slate-800 px-3 py-2">
+        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-300">Sample Input Data</p>
+      </div>
+      <pre className="max-h-80 overflow-auto p-3 font-mono text-xs leading-6 text-slate-100">
+        {question.sample_data_sql}
+      </pre>
+    </div>
   );
 }
 
