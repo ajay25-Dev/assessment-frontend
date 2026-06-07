@@ -1,14 +1,6 @@
 "use client";
 
-import { cpp } from "@codemirror/lang-cpp";
-import { java } from "@codemirror/lang-java";
-import { javascript } from "@codemirror/lang-javascript";
-import { python } from "@codemirror/lang-python";
-import { PostgreSQL, sql } from "@codemirror/lang-sql";
-import { EditorState } from "@codemirror/state";
-import { keymap, lineNumbers, EditorView } from "@codemirror/view";
-import { indentWithTab } from "@codemirror/commands";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef } from "react";
 
 type CodeEditorProps = {
   value: string;
@@ -17,127 +9,79 @@ type CodeEditorProps = {
   minHeight?: number;
 };
 
-function languageExtension(language: string) {
-  if (language === "python") return python();
-  if (language === "java") return java();
-  if (language === "cpp" || language === "c") return cpp();
-  if (language === "sql") return sql({ dialect: PostgreSQL });
-  return javascript({ jsx: true, typescript: language === "typescript" });
-}
-
 export function CodeEditor({ value, language, onChange, minHeight = 420 }: CodeEditorProps) {
-  const hostRef = useRef<HTMLDivElement>(null);
-  const viewRef = useRef<EditorView | null>(null);
-  const [failed, setFailed] = useState(false);
-
-  const extensions = useMemo(
-    () => [
-      lineNumbers(),
-      keymap.of([indentWithTab]),
-      languageExtension(language),
-      EditorView.lineWrapping,
-      EditorView.updateListener.of((update) => {
-        if (update.docChanged) onChange(update.state.doc.toString());
-      }),
-      EditorView.theme({
-        "&": {
-          minHeight: `${minHeight}px`,
-          height: "100%",
-          background: "#0f172a",
-          color: "#e2e8f0",
-          fontSize: "14px",
-        },
-        ".cm-scroller": {
-          fontFamily: "var(--font-geist-mono), ui-monospace, SFMono-Regular, Consolas, monospace",
-          minHeight: `${minHeight}px`,
-        },
-        ".cm-gutters": {
-          background: "#111827",
-          color: "#94a3b8",
-          borderRightColor: "#263244",
-        },
-        ".cm-activeLine": { background: "#1e293b" },
-        ".cm-activeLineGutter": { background: "#1e293b" },
-        ".cm-content": { padding: "14px 0" },
-        ".cm-line": { padding: "0 14px" },
-      }),
-      EditorState.tabSize.of(2),
-    ],
-    [language, minHeight, onChange],
-  );
-
-  useEffect(() => {
-    if (!hostRef.current) return;
-
-    try {
-      const state = EditorState.create({ doc: value, extensions });
-      const view = new EditorView({ state, parent: hostRef.current });
-      viewRef.current = view;
-
-      return () => {
-        view.destroy();
-        viewRef.current = null;
-      };
-    } catch {
-      window.setTimeout(() => setFailed(true), 0);
-    }
-    // The editor is created once for the current language. Document updates are
-    // synchronized by the separate value effect below.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [extensions]);
-
-  useEffect(() => {
-    const view = viewRef.current;
-    if (!view || view.state.doc.toString() === value) return;
-
-    view.dispatch({
-      changes: { from: 0, to: view.state.doc.length, insert: value },
-    });
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const lineNumbers = useMemo(() => {
+    const lineCount = Math.max(1, value.split("\n").length);
+    return Array.from({ length: lineCount }, (_, index) => index + 1);
   }, [value]);
 
   function insertToken(token: string) {
-    const view = viewRef.current;
-    if (!view) {
+    const textarea = textareaRef.current;
+    if (!textarea) {
       onChange(`${value}${token}`);
       return;
     }
 
-    const range = view.state.selection.main;
-    view.dispatch({
-      changes: { from: range.from, to: range.to, insert: token },
-      selection: { anchor: range.from + token.length },
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const nextValue = `${value.slice(0, start)}${token}${value.slice(end)}`;
+    onChange(nextValue);
+
+    window.requestAnimationFrame(() => {
+      textarea.focus();
+      textarea.setSelectionRange(start + token.length, start + token.length);
     });
-    view.focus();
   }
 
-  if (failed) {
-    return (
-      <textarea
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        spellCheck={false}
-        autoCapitalize="off"
-        autoCorrect="off"
-        className="h-full min-h-[420px] w-full resize-none bg-slate-950 p-4 font-mono text-sm leading-6 text-slate-100 outline-none"
-      />
-    );
+  function handleKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== "Tab") return;
+    event.preventDefault();
+    insertToken("  ");
   }
 
   return (
-    <div className="grid h-full min-h-[420px] grid-rows-[auto_1fr] overflow-hidden rounded-[8px] border border-slate-800 bg-slate-950">
-      <div className="flex flex-wrap gap-1 border-b border-slate-800 bg-slate-900 px-2 py-2">
-        {["Tab", "()", "[]", "{}", ";", "=>"].map((token) => (
-          <button
-            key={token}
-            type="button"
-            onClick={() => insertToken(token === "Tab" ? "  " : token)}
-            className="h-8 rounded-[6px] border border-slate-700 px-2 font-mono text-xs text-slate-200 hover:bg-slate-800"
-          >
-            {token}
-          </button>
-        ))}
+    <div
+      className="grid h-full min-h-0 grid-rows-[auto_1fr] overflow-hidden rounded-[8px] border border-slate-800 bg-slate-950"
+      style={{ minHeight }}
+    >
+      <div className="flex items-center justify-between gap-3 border-b border-slate-800 bg-slate-900 px-3 py-2">
+        <div className="flex flex-wrap gap-1">
+          {["Tab", "()", "[]", "{}", ";", "=>"].map((token) => (
+            <button
+              key={token}
+              type="button"
+              onClick={() => insertToken(token === "Tab" ? "  " : token)}
+              className="h-8 rounded-[6px] border border-slate-700 px-2 font-mono text-xs text-slate-200 hover:bg-slate-800"
+            >
+              {token}
+            </button>
+          ))}
+        </div>
+        <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+          {language}
+        </span>
       </div>
-      <div ref={hostRef} className="h-full min-h-[420px]" />
+
+      <div className="grid min-h-0 grid-cols-[48px_1fr] overflow-hidden">
+        <pre className="select-none overflow-hidden border-r border-slate-800 bg-slate-900 px-3 py-4 text-right font-mono text-sm leading-6 text-slate-500">
+          {lineNumbers.map((line) => (
+            <span key={line} className="block">
+              {line}
+            </span>
+          ))}
+        </pre>
+        <textarea
+          ref={textareaRef}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          onKeyDown={handleKeyDown}
+          spellCheck={false}
+          autoCapitalize="off"
+          autoCorrect="off"
+          className="h-full min-h-0 w-full resize-none overflow-auto bg-slate-950 p-4 font-mono text-sm leading-6 text-slate-100 outline-none"
+        />
+      </div>
     </div>
   );
 }
