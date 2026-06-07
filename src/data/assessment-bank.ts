@@ -57,6 +57,14 @@ export type AssessmentBank = {
     description: string;
     duration_minutes: number;
     scoring_weights: Record<AssessmentSectionId, number>;
+    security?: {
+      tab_switch_protection_enabled?: boolean;
+      max_tab_switch_events?: number;
+      auto_submit_on_max_events?: boolean;
+      camera_proctoring_enabled?: boolean;
+      max_camera_events?: number;
+      auto_submit_on_camera_events?: boolean;
+    };
     sections: Array<{
       id: string;
       name: AssessmentSectionId;
