@@ -126,8 +126,11 @@ function normalizeBucket(value: string | null | undefined, label: string | null 
   if (bucket === "failed") return "Failed";
 
   const readiness = String(label || "").trim().toLowerCase();
+  if (readiness === "elite 1% company ready" || readiness === "strong company ready") return "Ready";
+  if (readiness === "near ready" || readiness === "trainable but not ready") return "Training Needed";
+  if (readiness === "risky high scorer" || readiness === "not ready") return "Failed";
   if (readiness.includes("risk") || readiness.includes("fail")) return "Failed";
-  if (readiness.includes("need") || readiness.includes("practice")) return "Training Needed";
+  if (readiness.includes("need") || readiness.includes("practice") || readiness.includes("train")) return "Training Needed";
   return "Ready";
 }
 

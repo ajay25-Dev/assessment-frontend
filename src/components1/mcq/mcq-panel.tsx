@@ -10,7 +10,7 @@ type McqPanelProps = {
 
 export function McqPanel({ question, selected, onChange }: McqPanelProps) {
   const options = question.options || [];
-  const multiple = (question.correct_options?.length || 1) > 1;
+  const multiple = Boolean(question.allow_multiple_answers);
 
   function toggle(label: string) {
     if (!multiple) {

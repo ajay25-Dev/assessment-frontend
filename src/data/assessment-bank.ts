@@ -45,8 +45,15 @@ export type AssessmentQuestion = {
   starter_code?: Record<string, string>;
   dialect?: string;
   expected_columns?: string[];
+  sample_data_sql?: string;
+  sample_data_tables?: Array<{
+    name: string;
+    columns: string[];
+    rows: string[][];
+  }>;
   options?: Array<{ label: string; text: string }>;
   correct_options?: string[];
+  allow_multiple_answers?: boolean;
   explanation?: string;
 };
 

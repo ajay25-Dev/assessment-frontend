@@ -2,16 +2,19 @@ import {
   AlertTriangle,
   BadgeCheck,
   BarChart3,
+  BookOpen,
   BookOpenCheck,
   Building2,
   CheckCircle2,
   Code2,
+  Database,
   Gauge,
   GraduationCap,
   LogOut,
   ShieldAlert,
   Target,
   TrendingUp,
+  Wrench,
 } from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -31,7 +34,13 @@ const subjectTypeLabels: Record<string, string> = {
 type ScoreTone = "green" | "amber" | "red" | "blue";
 type RiskLevel = "Low" | "Medium" | "High";
 type CompilationBehaviour = "Clean" | "Warnings" | "Failed";
-type ReadinessLabel = "Ready" | "Needs Practice" | "At Risk";
+type ReadinessLabel =
+  | "Elite 1% Company Ready"
+  | "Strong Company Ready"
+  | "Near Ready"
+  | "Trainable but Not Ready"
+  | "Risky High Scorer"
+  | "Not Ready";
 
 type StudentAssessmentReportRow = {
   id: string;
@@ -40,6 +49,10 @@ type StudentAssessmentReportRow = {
   assessment_title: string | null;
   marks_score: number | null;
   capability_score: number | null;
+  dsa_score: number | null;
+  sql_score: number | null;
+  oops_score: number | null;
+  mcq_score: number | null;
   approach_score: number | null;
   complexity_score: number | null;
   code_quality_score: number | null;
@@ -47,9 +60,17 @@ type StudentAssessmentReportRow = {
   brute_force_risk: string | null;
   hardcoding_risk: string | null;
   compilation_behaviour: string | null;
+  runtime_percentile: string | null;
   readiness_label: string | null;
+  strongest_section: string | null;
+  weakest_section: string | null;
+  training_recommendation: string | null;
   faculty_insight: string | null;
   company_recommendation: string | null;
+  student_summary: string | null;
+  detailed_strengths: unknown;
+  detailed_weaknesses: unknown;
+  next_3_learning_actions: unknown;
   created_at: string | null;
 };
 
@@ -98,9 +119,12 @@ function normalizeCompilation(value: string | null | undefined): CompilationBeha
 
 function normalizeReadiness(value: string | null | undefined): ReadinessLabel {
   const normalized = String(value || "").trim().toLowerCase();
-  if (normalized === "at risk") return "At Risk";
-  if (normalized === "needs practice") return "Needs Practice";
-  return "Ready";
+  if (normalized === "elite 1% company ready") return "Elite 1% Company Ready";
+  if (normalized === "strong company ready") return "Strong Company Ready";
+  if (normalized === "near ready") return "Near Ready";
+  if (normalized === "risky high scorer") return "Risky High Scorer";
+  if (normalized === "not ready") return "Not Ready";
+  return "Trainable but Not Ready";
 }
 
 function toneForScore(score: number): ScoreTone {
@@ -134,9 +158,13 @@ function compilationTone(value: CompilationBehaviour) {
 }
 
 function readinessTone(value: ReadinessLabel) {
-  if (value === "Ready") return "border-emerald-200 bg-emerald-50 text-emerald-800";
-  if (value === "Needs Practice") return "border-amber-200 bg-amber-50 text-amber-800";
+  if (value === "Elite 1% Company Ready" || value === "Strong Company Ready") return "border-emerald-200 bg-emerald-50 text-emerald-800";
+  if (value === "Near Ready" || value === "Trainable but Not Ready") return "border-amber-200 bg-amber-50 text-amber-800";
   return "border-red-200 bg-red-50 text-red-800";
+}
+
+function asStringArray(value: unknown) {
+  return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : [];
 }
 
 function ScoreCard({
@@ -379,6 +407,10 @@ export default async function DashboardPage() {
         "assessment_title",
         "marks_score",
         "capability_score",
+        "dsa_score",
+        "sql_score",
+        "oops_score",
+        "mcq_score",
         "approach_score",
         "complexity_score",
         "code_quality_score",
@@ -386,9 +418,17 @@ export default async function DashboardPage() {
         "brute_force_risk",
         "hardcoding_risk",
         "compilation_behaviour",
+        "runtime_percentile",
         "readiness_label",
+        "strongest_section",
+        "weakest_section",
+        "training_recommendation",
         "faculty_insight",
         "company_recommendation",
+        "student_summary",
+        "detailed_strengths",
+        "detailed_weaknesses",
+        "next_3_learning_actions",
         "created_at",
       ].join(","),
     )
@@ -409,6 +449,9 @@ export default async function DashboardPage() {
   const hardcodingRisk = normalizeRisk(latestReport.hardcoding_risk);
   const compilationBehaviour = normalizeCompilation(latestReport.compilation_behaviour);
   const readinessLabel = normalizeReadiness(latestReport.readiness_label);
+  const detailedStrengths = asStringArray(latestReport.detailed_strengths);
+  const detailedWeaknesses = asStringArray(latestReport.detailed_weaknesses);
+  const nextActions = asStringArray(latestReport.next_3_learning_actions);
 
   const scoreCards = [
     {
@@ -447,6 +490,13 @@ export default async function DashboardPage() {
       icon: ShieldAlert,
       note: "Unseen case reliability",
     },
+  ];
+
+  const sectionCards = [
+    { label: "DSA Score", value: clampScore(latestReport.dsa_score), icon: Code2 },
+    { label: "SQL Score", value: clampScore(latestReport.sql_score), icon: Database },
+    { label: "OOPs Score", value: clampScore(latestReport.oops_score), icon: Wrench },
+    { label: "MCQ Score", value: clampScore(latestReport.mcq_score), icon: BookOpen },
   ];
 
   return (
@@ -499,6 +549,18 @@ export default async function DashboardPage() {
           ))}
         </section>
 
+        <section className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          {sectionCards.map(({ label, value, icon: Icon }) => (
+            <article key={label} className="rounded-[8px] border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="flex items-center gap-2 text-slate-950">
+                <Icon size={18} />
+                <h3 className="font-semibold">{label}</h3>
+              </div>
+              <p className="mt-4 text-3xl font-semibold text-slate-950">{value}</p>
+            </article>
+          ))}
+        </section>
+
         <section className="mt-6 grid gap-4 lg:grid-cols-3">
           <article className="rounded-[8px] border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex items-center gap-2 text-slate-950">
@@ -540,6 +602,21 @@ export default async function DashboardPage() {
           </article>
         </section>
 
+        <section className="mt-6 grid gap-4 lg:grid-cols-3">
+          <article className="rounded-[8px] border border-slate-200 bg-white p-5 shadow-sm">
+            <p className="text-sm font-medium text-slate-500">Runtime Percentile</p>
+            <p className="mt-3 text-2xl font-semibold text-slate-950">{latestReport.runtime_percentile || "Unknown"}</p>
+          </article>
+          <article className="rounded-[8px] border border-slate-200 bg-white p-5 shadow-sm">
+            <p className="text-sm font-medium text-slate-500">Strongest Area</p>
+            <p className="mt-3 text-2xl font-semibold text-slate-950">{latestReport.strongest_section || "-"}</p>
+          </article>
+          <article className="rounded-[8px] border border-slate-200 bg-white p-5 shadow-sm">
+            <p className="text-sm font-medium text-slate-500">Weakest Area</p>
+            <p className="mt-3 text-2xl font-semibold text-slate-950">{latestReport.weakest_section || "-"}</p>
+          </article>
+        </section>
+
         <section className="mt-6 grid gap-4 lg:grid-cols-[1fr_1fr]">
           <article className="rounded-[8px] border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex items-center gap-2 text-slate-950">
@@ -560,6 +637,38 @@ export default async function DashboardPage() {
               {latestReport.company_recommendation || "No company recommendation has been added yet."}
             </p>
           </article>
+        </section>
+
+        <section className="mt-6 grid gap-4 lg:grid-cols-[1fr_1fr]">
+          <article className="rounded-[8px] border border-slate-200 bg-white p-5 shadow-sm">
+            <h3 className="font-semibold text-slate-950">Student Summary</h3>
+            <p className="mt-4 leading-7 text-slate-700">{latestReport.student_summary || "No summary available."}</p>
+          </article>
+          <article className="rounded-[8px] border border-slate-200 bg-white p-5 shadow-sm">
+            <h3 className="font-semibold text-slate-950">Training Recommendation</h3>
+            <p className="mt-4 leading-7 text-slate-700">{latestReport.training_recommendation || "No training recommendation available."}</p>
+          </article>
+        </section>
+
+        <section className="mt-6 grid gap-4 lg:grid-cols-3">
+          {[
+            { title: "Detailed Strengths", items: detailedStrengths },
+            { title: "Detailed Weaknesses", items: detailedWeaknesses },
+            { title: "Next 3 Learning Actions", items: nextActions },
+          ].map((list) => (
+            <article key={list.title} className="rounded-[8px] border border-slate-200 bg-white p-5 shadow-sm">
+              <h3 className="font-semibold text-slate-950">{list.title}</h3>
+              {list.items.length ? (
+                <ul className="mt-4 space-y-3 text-sm leading-6 text-slate-700">
+                  {list.items.map((item) => (
+                    <li key={item} className="rounded-[8px] border border-slate-200 bg-slate-50 px-3 py-2">{item}</li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-4 text-sm leading-6 text-slate-600">No entries available.</p>
+              )}
+            </article>
+          ))}
         </section>
 
         <section className="mt-6 rounded-[8px] border border-slate-200 bg-white p-5 shadow-sm">

@@ -43,16 +43,22 @@ type ReportRow = {
   brute_force_risk: string | null;
   hardcoding_risk: string | null;
   compilation_behaviour: string | null;
+  runtime_percentile: string | null;
   readiness_label: string | null;
   readiness_bucket: string | null;
   readiness_reason: unknown;
   strongest_section: string | null;
   weakest_section: string | null;
   training_priority: string | null;
+  training_recommendation: string | null;
   teacher_action: string | null;
   risk_summary: unknown;
   faculty_insight: string | null;
   company_recommendation: string | null;
+  student_summary: string | null;
+  detailed_strengths: unknown;
+  detailed_weaknesses: unknown;
+  next_3_learning_actions: unknown;
   report_json: unknown;
   created_at: string | null;
 };
@@ -151,8 +157,11 @@ function normalizeBucket(value: string | null | undefined, label: string | null 
   if (bucket === "failed") return "Failed";
 
   const readiness = String(label || "").trim().toLowerCase();
+  if (readiness === "elite 1% company ready" || readiness === "strong company ready") return "Ready";
+  if (readiness === "near ready" || readiness === "trainable but not ready") return "Training Needed";
+  if (readiness === "risky high scorer" || readiness === "not ready") return "Failed";
   if (readiness.includes("risk") || readiness.includes("fail")) return "Failed";
-  if (readiness.includes("need") || readiness.includes("practice")) return "Training Needed";
+  if (readiness.includes("need") || readiness.includes("practice") || readiness.includes("train")) return "Training Needed";
   return "Ready";
 }
 
@@ -233,16 +242,22 @@ export default async function AttemptReportCardPage({
           "brute_force_risk",
           "hardcoding_risk",
           "compilation_behaviour",
+          "runtime_percentile",
           "readiness_label",
           "readiness_bucket",
           "readiness_reason",
           "strongest_section",
           "weakest_section",
           "training_priority",
+          "training_recommendation",
           "teacher_action",
           "risk_summary",
           "faculty_insight",
           "company_recommendation",
+          "student_summary",
+          "detailed_strengths",
+          "detailed_weaknesses",
+          "next_3_learning_actions",
           "report_json",
           "created_at",
         ].join(","),
@@ -317,6 +332,9 @@ export default async function AttemptReportCardPage({
 
   const readinessReason = stringify(report.readiness_reason);
   const riskSummary = stringify(report.risk_summary);
+  const detailedStrengths = asStringArray(report.detailed_strengths);
+  const detailedWeaknesses = asStringArray(report.detailed_weaknesses);
+  const nextActions = asStringArray(report.next_3_learning_actions);
 
   return (
     <div className="grid gap-6">
@@ -335,6 +353,9 @@ export default async function AttemptReportCardPage({
             <div className="mt-4 flex flex-wrap gap-2 text-sm">
               <span className={`rounded-[8px] border px-3 py-2 font-semibold ${readinessClasses(readinessBucket)}`}>
                 {readinessBucket}
+              </span>
+              <span className="rounded-[8px] border border-slate-200 bg-slate-50 px-3 py-2 text-slate-700">
+                {report.readiness_label || "-"}
               </span>
               <span className="rounded-[8px] border border-slate-200 bg-slate-50 px-3 py-2 text-slate-700">
                 Strongest {report.strongest_section || "-"}
@@ -374,6 +395,10 @@ export default async function AttemptReportCardPage({
           <p className="text-sm font-medium text-slate-500">Compilation Behaviour</p>
           <p className="mt-2 text-3xl font-semibold text-slate-950">{report.compilation_behaviour || "-"}</p>
         </article>
+        <article className="rounded-[8px] border border-slate-200 bg-white p-5 shadow-sm">
+          <p className="text-sm font-medium text-slate-500">Runtime Percentile</p>
+          <p className="mt-2 text-3xl font-semibold text-slate-950">{report.runtime_percentile || "Unknown"}</p>
+        </article>
       </section>
 
       <section className="grid gap-4 xl:grid-cols-[1fr_1fr]">
@@ -386,6 +411,10 @@ export default async function AttemptReportCardPage({
             <div className="rounded-[8px] border border-slate-200 bg-slate-50 px-3 py-3">
               <p className="font-medium text-slate-900">Training Priority</p>
               <p className="mt-2 leading-6">{report.training_priority || "-"}</p>
+            </div>
+            <div className="rounded-[8px] border border-slate-200 bg-slate-50 px-3 py-3">
+              <p className="font-medium text-slate-900">Training Recommendation</p>
+              <p className="mt-2 leading-6">{report.training_recommendation || "-"}</p>
             </div>
             <div className="rounded-[8px] border border-slate-200 bg-slate-50 px-3 py-3">
               <p className="font-medium text-slate-900">Teacher Action</p>
@@ -417,6 +446,40 @@ export default async function AttemptReportCardPage({
               <pre className="mt-2 whitespace-pre-wrap break-words font-mono text-xs leading-6 text-slate-700">{riskSummary}</pre>
             </div>
           </div>
+        </article>
+      </section>
+
+      <section className="grid gap-4 xl:grid-cols-[1fr_1fr]">
+        <article className="rounded-[8px] border border-slate-200 bg-white p-5 shadow-sm">
+          <h3 className="font-semibold text-slate-950">Student Summary</h3>
+          <p className="mt-4 leading-7 text-slate-700">{report.student_summary || "-"}</p>
+        </article>
+        <article className="rounded-[8px] border border-slate-200 bg-white p-5 shadow-sm">
+          <h3 className="font-semibold text-slate-950">Next Learning Actions</h3>
+          <ul className="mt-4 space-y-2 text-sm leading-6 text-slate-700">
+            {(nextActions.length ? nextActions : ["-"]).map((item) => (
+              <li key={item} className="rounded-[8px] border border-slate-200 bg-slate-50 px-3 py-2">{item}</li>
+            ))}
+          </ul>
+        </article>
+      </section>
+
+      <section className="grid gap-4 xl:grid-cols-[1fr_1fr]">
+        <article className="rounded-[8px] border border-slate-200 bg-white p-5 shadow-sm">
+          <h3 className="font-semibold text-slate-950">Detailed Strengths</h3>
+          <ul className="mt-4 space-y-2 text-sm leading-6 text-slate-700">
+            {(detailedStrengths.length ? detailedStrengths : ["-"]).map((item) => (
+              <li key={item} className="rounded-[8px] border border-slate-200 bg-slate-50 px-3 py-2">{item}</li>
+            ))}
+          </ul>
+        </article>
+        <article className="rounded-[8px] border border-slate-200 bg-white p-5 shadow-sm">
+          <h3 className="font-semibold text-slate-950">Detailed Weaknesses</h3>
+          <ul className="mt-4 space-y-2 text-sm leading-6 text-slate-700">
+            {(detailedWeaknesses.length ? detailedWeaknesses : ["-"]).map((item) => (
+              <li key={item} className="rounded-[8px] border border-slate-200 bg-slate-50 px-3 py-2">{item}</li>
+            ))}
+          </ul>
         </article>
       </section>
 
