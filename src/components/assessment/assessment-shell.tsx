@@ -3,6 +3,8 @@
 import {
   AlertTriangle,
   BookOpen,
+  Camera,
+  CameraOff,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
@@ -19,7 +21,7 @@ import {
   Send,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { useRouter } from "next/navigation";
 import { CodeEditor } from "@/components/editor/code-editor";
 import { McqPanel } from "@/components/mcq/mcq-panel";
@@ -38,6 +40,7 @@ type AnswerState = {
 };
 
 type ActiveTab = "problem" | "answer" | "results";
+type CameraPosition = { x: number; y: number };
 
 type CompilerResponse = {
   status?: { id?: number; description?: string };
@@ -217,6 +220,33 @@ function firstQuestionInSection(questions: AssessmentQuestion[], section: Assess
   return questions.find((question) => question.section === section)?.id || questions[0]?.id || "";
 }
 
+function publicEnvEnabled(value: string | undefined) {
+  if (value === undefined) return null;
+  return !["0", "false", "off", "no"].includes(value.trim().toLowerCase());
+}
+
+function publicEnvNumber(value: string | undefined) {
+  if (!value) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null;
+}
+
+function defaultCameraPosition(): CameraPosition {
+  if (typeof window === "undefined") return { x: 16, y: 16 };
+  return {
+    x: 16,
+    y: Math.max(16, window.innerHeight - 176),
+  };
+}
+
+function clampCameraPosition(position: CameraPosition): CameraPosition {
+  if (typeof window === "undefined") return position;
+  return {
+    x: Math.max(8, Math.min(position.x, window.innerWidth - 190)),
+    y: Math.max(8, Math.min(position.y, window.innerHeight - 150)),
+  };
+}
+
 function loadInitialSnapshot(assessmentBank: AssessmentBank) {
   const questions = assessmentBank.questions;
   const initialTiming = sectionTimingForElapsed(assessmentBank, 0);
@@ -227,6 +257,7 @@ function loadInitialSnapshot(assessmentBank: AssessmentBank) {
     sectionRemainingSeconds: initialTiming.sectionRemainingSeconds,
     remainingSeconds: initialTiming.totalRemainingSeconds,
     tabEvents: 0,
+    cameraEvents: 0,
   };
 }
 
@@ -238,7 +269,6 @@ function loadSavedSnapshot(assessmentBank: AssessmentBank, assessmentInstanceId?
 
   const saved = window.localStorage.getItem(storageKey);
   if (!saved) {
-    window.localStorage.setItem(`${storageKey}:startedAt`, new Date().toISOString());
     return fallback;
   }
 
@@ -248,6 +278,7 @@ function loadSavedSnapshot(assessmentBank: AssessmentBank, assessmentInstanceId?
       activeQuestionId?: string;
       startedAt?: string;
       tabEvents?: number;
+      cameraEvents?: number;
     };
     const startedAt = parsed.startedAt || window.localStorage.getItem(`${storageKey}:startedAt`);
     const elapsed = startedAt ? Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000) : 0;
@@ -264,6 +295,7 @@ function loadSavedSnapshot(assessmentBank: AssessmentBank, assessmentInstanceId?
       sectionRemainingSeconds: timing.sectionRemainingSeconds,
       remainingSeconds: timing.totalRemainingSeconds,
       tabEvents: parsed.tabEvents || 0,
+      cameraEvents: parsed.cameraEvents || 0,
     };
   } catch {
     window.localStorage.removeItem(storageKey);
@@ -293,17 +325,48 @@ export function AssessmentShell({
   const [isQuestionPanelPinned, setIsQuestionPanelPinned] = useState(false);
   const [activeTab, setActiveTab] = useState<ActiveTab>("answer");
   const [tabEvents, setTabEvents] = useState(initialSnapshot.tabEvents);
+  const [cameraEvents, setCameraEvents] = useState(initialSnapshot.cameraEvents);
   const [isExecuting, setIsExecuting] = useState(false);
   const [isFinalizing, setIsFinalizing] = useState(false);
+  const [securitySubmitTabEvents, setSecuritySubmitTabEvents] = useState<number | null>(null);
+  const [securitySubmitCameraEvents, setSecuritySubmitCameraEvents] = useState<number | null>(null);
+  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [isRequestingCamera, setIsRequestingCamera] = useState(false);
+  const [cameraPosition, setCameraPosition] = useState<CameraPosition>(() => defaultCameraPosition());
   const [sqlResult, setSqlResult] = useState<SqlRunResponse | null>(null);
   const [testResults, setTestResults] = useState<TestResultsOutput | null>(null);
   const [animatingTestIndex, setAnimatingTestIndex] = useState<number>(-1);
   const resultsRef = useRef<HTMLDivElement>(null);
+  const cameraVideoRef = useRef<HTMLVideoElement>(null);
   const autoSubmitStartedRef = useRef(false);
+  const pendingTabWarningRef = useRef<number | null>(null);
+  const cameraDragRef = useRef<{ pointerId: number; offsetX: number; offsetY: number } | null>(null);
 
   const activeIndex = questions.findIndex((question) => question.id === activeQuestionId);
   const activeQuestion = questions[Math.max(0, activeIndex)];
   const activeAnswer = answers[activeQuestion.id] || initialAnswer(activeQuestion);
+  const tabSecurity = useMemo(() => {
+    const configured = assessmentBank.assessment.security;
+    const envEnabled = publicEnvEnabled(process.env.NEXT_PUBLIC_ASSESSMENT_TAB_SECURITY_ENABLED);
+    const envMaxEvents = publicEnvNumber(process.env.NEXT_PUBLIC_ASSESSMENT_TAB_SECURITY_MAX_EVENTS);
+    return {
+      enabled: envEnabled ?? configured?.tab_switch_protection_enabled ?? true,
+      maxEvents: envMaxEvents ?? configured?.max_tab_switch_events ?? 3,
+      autoSubmitOnMax: configured?.auto_submit_on_max_events ?? true,
+    };
+  }, [assessmentBank.assessment.security]);
+  const cameraSecurity = useMemo(() => {
+    const configured = assessmentBank.assessment.security;
+    const envEnabled = publicEnvEnabled(process.env.NEXT_PUBLIC_ASSESSMENT_CAMERA_PROCTORING_ENABLED);
+    const envMaxEvents = publicEnvNumber(process.env.NEXT_PUBLIC_ASSESSMENT_CAMERA_MAX_EVENTS);
+    return {
+      enabled: envEnabled ?? configured?.camera_proctoring_enabled ?? false,
+      maxEvents: envMaxEvents ?? configured?.max_camera_events ?? 3,
+      autoSubmitOnMax: configured?.auto_submit_on_camera_events ?? true,
+    };
+  }, [assessmentBank.assessment.security]);
+  const canRunAssessment = !cameraSecurity.enabled || Boolean(cameraStream);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -314,6 +377,7 @@ export function AssessmentShell({
       setSectionRemainingSeconds(savedSnapshot.sectionRemainingSeconds);
       setRemainingSeconds(savedSnapshot.remainingSeconds);
       setTabEvents(savedSnapshot.tabEvents);
+      setCameraEvents(savedSnapshot.cameraEvents);
       setHasHydrated(true);
     }, 0);
 
@@ -352,7 +416,11 @@ export function AssessmentShell({
   );
 
   useEffect(() => {
-    if (!hasHydrated) return;
+    if (!hasHydrated || !canRunAssessment) return;
+
+    if (!localStorage.getItem(`${storageKey}:startedAt`)) {
+      localStorage.setItem(`${storageKey}:startedAt`, new Date().toISOString());
+    }
 
     const interval = window.setInterval(() => {
       const startedAt = localStorage.getItem(`${storageKey}:startedAt`);
@@ -381,10 +449,10 @@ export function AssessmentShell({
     }, 1000);
 
     return () => window.clearInterval(interval);
-  }, [assessmentBank, hasHydrated, questions, storageKey]);
+  }, [assessmentBank, canRunAssessment, hasHydrated, questions, storageKey]);
 
   useEffect(() => {
-    if (!hasHydrated) return;
+    if (!hasHydrated || !canRunAssessment) return;
 
     const interval = window.setInterval(() => {
       const existing = localStorage.getItem(storageKey);
@@ -403,6 +471,7 @@ export function AssessmentShell({
           startedAt,
           activeSection,
           tabEvents,
+          cameraEvents,
           savedAt: new Date().toISOString(),
         }),
       );
@@ -410,16 +479,7 @@ export function AssessmentShell({
     }, 6000);
 
     return () => window.clearInterval(interval);
-  }, [activeQuestionId, activeSection, answers, hasHydrated, storageKey, tabEvents]);
-
-  useEffect(() => {
-    function onVisibilityChange() {
-      if (document.hidden) setTabEvents((count) => count + 1);
-    }
-
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
-  }, []);
+  }, [activeQuestionId, activeSection, answers, cameraEvents, canRunAssessment, hasHydrated, storageKey, tabEvents]);
 
   const updateActiveAnswer = useCallback((patch: Partial<AnswerState>) => {
     setAnswers((current) => ({
@@ -442,6 +502,102 @@ export function AssessmentShell({
     [updateActiveAnswer],
   );
 
+  const recordCameraEvent = useCallback((message: string) => {
+    if (!cameraSecurity.enabled || isFinalizing || autoSubmitStartedRef.current) return;
+
+    setCameraEvents((count) => {
+      const next = count + 1;
+      const reachedLimit = next >= cameraSecurity.maxEvents;
+      window.alert(
+        reachedLimit
+          ? `Camera warning ${next}/${cameraSecurity.maxEvents}: ${message} Your assessment will be submitted now.`
+          : `Camera warning ${next}/${cameraSecurity.maxEvents}: ${message}`,
+      );
+      if (reachedLimit && cameraSecurity.autoSubmitOnMax) {
+        setSecuritySubmitCameraEvents(next);
+      }
+      return next;
+    });
+  }, [cameraSecurity.autoSubmitOnMax, cameraSecurity.enabled, cameraSecurity.maxEvents, isFinalizing]);
+
+  const requestCameraAccess = useCallback(async () => {
+    if (!cameraSecurity.enabled) return;
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCameraError("Camera access is not supported in this browser.");
+      return;
+    }
+
+    setIsRequestingCamera(true);
+    setCameraError(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: false,
+      });
+      if (!localStorage.getItem(`${storageKey}:startedAt`)) {
+        localStorage.setItem(`${storageKey}:startedAt`, new Date().toISOString());
+      }
+      setCameraStream(stream);
+    } catch (error) {
+      setCameraError(error instanceof Error ? error.message : "Camera permission was not granted.");
+    } finally {
+      setIsRequestingCamera(false);
+    }
+  }, [cameraSecurity.enabled, storageKey]);
+
+  const cameraPositionKey = `${storageKey}:cameraPosition`;
+
+  useEffect(() => {
+    if (!cameraSecurity.enabled) return;
+
+    const savedPosition = localStorage.getItem(cameraPositionKey);
+    if (!savedPosition) {
+      setCameraPosition(clampCameraPosition(defaultCameraPosition()));
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(savedPosition) as Partial<CameraPosition>;
+      setCameraPosition(clampCameraPosition({
+        x: Number(parsed.x || 16),
+        y: Number(parsed.y || 16),
+      }));
+    } catch {
+      localStorage.removeItem(cameraPositionKey);
+      setCameraPosition(clampCameraPosition(defaultCameraPosition()));
+    }
+  }, [cameraPositionKey, cameraSecurity.enabled]);
+
+  useEffect(() => {
+    if (!cameraSecurity.enabled) return;
+    localStorage.setItem(cameraPositionKey, JSON.stringify(cameraPosition));
+  }, [cameraPosition, cameraPositionKey, cameraSecurity.enabled]);
+
+  function startCameraDrag(event: PointerEvent<HTMLDivElement>) {
+    const target = event.currentTarget;
+    target.setPointerCapture(event.pointerId);
+    cameraDragRef.current = {
+      pointerId: event.pointerId,
+      offsetX: event.clientX - cameraPosition.x,
+      offsetY: event.clientY - cameraPosition.y,
+    };
+  }
+
+  function moveCameraDrag(event: PointerEvent<HTMLDivElement>) {
+    const drag = cameraDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    setCameraPosition(clampCameraPosition({
+      x: event.clientX - drag.offsetX,
+      y: event.clientY - drag.offsetY,
+    }));
+  }
+
+  function stopCameraDrag(event: PointerEvent<HTMLDivElement>) {
+    const drag = cameraDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    cameraDragRef.current = null;
+  }
+
   function scrollToResults() {
     window.requestAnimationFrame(() => {
       resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -455,6 +611,9 @@ export function AssessmentShell({
     setActiveQuestionId(questionId);
     setActiveTab("answer");
     setNavOpen(false);
+    setSqlResult(null);
+    setTestResults(null);
+    setAnimatingTestIndex(-1);
     setAnswers((current) => ({
       ...current,
       [questionId]: {
@@ -692,13 +851,18 @@ export function AssessmentShell({
         startedAt: localStorage.getItem(`${storageKey}:startedAt`) || new Date().toISOString(),
         activeSection,
         tabEvents,
+        cameraEvents,
         savedAt: new Date().toISOString(),
       }),
     );
     setLastSavedAt(new Date());
-  }, [activeQuestionId, activeSection, answers, storageKey, tabEvents]);
+  }, [activeQuestionId, activeSection, answers, cameraEvents, storageKey, tabEvents]);
 
-  const submitAssessment = useCallback(async (submissionMode: "manual" | "auto" = "manual") => {
+  const submitAssessment = useCallback(async (
+    submissionMode: "manual" | "auto" = "manual",
+    tabEventsOverride?: number,
+    cameraEventsOverride?: number,
+  ) => {
     if (isExecuting || isFinalizing) return;
 
     saveNow();
@@ -713,7 +877,8 @@ export function AssessmentShell({
           started_at: localStorage.getItem(`${storageKey}:startedAt`) || new Date().toISOString(),
           submitted_at: new Date().toISOString(),
           duration_minutes: assessmentBank.assessment.duration_minutes,
-          tab_events: tabEvents,
+          tab_events: tabEventsOverride ?? tabEvents,
+          camera_events: cameraEventsOverride ?? cameraEvents,
           submission_mode: submissionMode,
           answers,
         }),
@@ -744,6 +909,7 @@ export function AssessmentShell({
     assessmentBank.assessment.duration_minutes,
     assessmentBank.assessment.id,
     assessmentInstanceId,
+    cameraEvents,
     isExecuting,
     isFinalizing,
     router,
@@ -754,11 +920,129 @@ export function AssessmentShell({
   ]);
 
   useEffect(() => {
-    if (!hasHydrated || remainingSeconds > 0 || isExecuting || isFinalizing || autoSubmitStartedRef.current) return;
+    if (!hasHydrated || !canRunAssessment || remainingSeconds > 0 || isExecuting || isFinalizing || autoSubmitStartedRef.current) return;
 
     autoSubmitStartedRef.current = true;
     void submitAssessment("auto");
-  }, [hasHydrated, isExecuting, isFinalizing, remainingSeconds, submitAssessment]);
+  }, [canRunAssessment, hasHydrated, isExecuting, isFinalizing, remainingSeconds, submitAssessment]);
+
+  useEffect(() => {
+    if (securitySubmitTabEvents === null || isExecuting || isFinalizing || autoSubmitStartedRef.current) return;
+
+    autoSubmitStartedRef.current = true;
+    void submitAssessment("auto", securitySubmitTabEvents);
+  }, [isExecuting, isFinalizing, securitySubmitTabEvents, submitAssessment]);
+
+  useEffect(() => {
+    if (securitySubmitCameraEvents === null || isExecuting || isFinalizing || autoSubmitStartedRef.current) return;
+
+    autoSubmitStartedRef.current = true;
+    void submitAssessment("auto", undefined, securitySubmitCameraEvents);
+  }, [isExecuting, isFinalizing, securitySubmitCameraEvents, submitAssessment]);
+
+  useEffect(() => {
+    if (!cameraVideoRef.current || !cameraStream) return;
+
+    cameraVideoRef.current.srcObject = cameraStream;
+  }, [cameraStream]);
+
+  useEffect(() => {
+    if (!cameraStream) return;
+
+    const tracks = cameraStream.getVideoTracks();
+    const onEnded = () => recordCameraEvent("Camera access stopped during the assessment.");
+    const onMute = () => recordCameraEvent("Camera feed was interrupted during the assessment.");
+    tracks.forEach((track) => {
+      track.addEventListener("ended", onEnded);
+      track.addEventListener("mute", onMute);
+    });
+
+    return () => {
+      tracks.forEach((track) => {
+        track.removeEventListener("ended", onEnded);
+        track.removeEventListener("mute", onMute);
+      });
+    };
+  }, [cameraStream, recordCameraEvent]);
+
+  useEffect(() => {
+    return () => {
+      cameraStream?.getTracks().forEach((track) => track.stop());
+    };
+  }, [cameraStream]);
+
+  useEffect(() => {
+    if (!hasHydrated || !canRunAssessment || !tabSecurity.enabled) return;
+
+    function onVisibilityChange() {
+      if (isFinalizing || autoSubmitStartedRef.current) return;
+
+      if (document.hidden) {
+        setTabEvents((count) => {
+          const next = count + 1;
+          pendingTabWarningRef.current = next;
+          return next;
+        });
+        return;
+      }
+
+      const violationCount = pendingTabWarningRef.current;
+      if (!violationCount) return;
+
+      pendingTabWarningRef.current = null;
+      const reachedLimit = violationCount >= tabSecurity.maxEvents;
+      window.alert(
+        reachedLimit
+          ? `Warning ${violationCount}/${tabSecurity.maxEvents}: You have reached the maximum tab/window change limit. Your assessment will be submitted now.`
+          : `Warning ${violationCount}/${tabSecurity.maxEvents}: Do not change window or open another tab during the assessment.`,
+      );
+
+      if (reachedLimit && tabSecurity.autoSubmitOnMax) {
+        setSecuritySubmitTabEvents(violationCount);
+      }
+    }
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("focus", onVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("focus", onVisibilityChange);
+    };
+  }, [canRunAssessment, hasHydrated, isFinalizing, submitAssessment, tabSecurity.autoSubmitOnMax, tabSecurity.enabled, tabSecurity.maxEvents]);
+
+  if (cameraSecurity.enabled && !cameraStream) {
+    return (
+      <main className="grid min-h-dvh place-items-center bg-[#f6f8f4] px-4 py-6 text-slate-950">
+        <section className="w-full max-w-lg rounded-[8px] border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="inline-flex h-12 w-12 items-center justify-center rounded-[8px] bg-emerald-50 text-emerald-800">
+            <Camera size={22} />
+          </div>
+          <h1 className="mt-5 text-2xl font-semibold tracking-[-0.02em] text-slate-950">Camera access required</h1>
+          <p className="mt-3 text-sm leading-6 text-slate-600">
+            Camera proctoring is active for this assessment. Turn on your camera to continue.
+          </p>
+          {cameraError ? (
+            <div className="mt-4 flex gap-2 rounded-[8px] border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+              <CameraOff size={17} className="mt-0.5 shrink-0" />
+              <p>{cameraError}</p>
+            </div>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => void requestCameraAccess()}
+            disabled={isRequestingCamera}
+            className="mt-5 inline-flex h-11 items-center gap-2 rounded-[8px] bg-emerald-700 px-4 text-sm font-semibold text-white shadow-sm hover:bg-emerald-800 disabled:opacity-50"
+          >
+            <Camera size={17} />
+            {isRequestingCamera ? "Requesting camera..." : "Turn On Camera"}
+          </button>
+          <p className="mt-4 text-xs leading-5 text-slate-500">
+            The camera feed is monitored live in the browser. Video recording is not enabled.
+          </p>
+        </section>
+      </main>
+    );
+  }
 
   const attempted = Object.values(answers).filter((answer) => answer.status !== "unvisited").length;
   const submitted = Object.values(answers).filter((answer) => answer.status === "submitted").length;
@@ -772,6 +1056,26 @@ export function AssessmentShell({
     : null;
   return (
     <main className="flex min-h-dvh flex-col bg-[radial-gradient(circle_at_top_left,#e7fff4_0,#f7faf8_30%,#eef3f0_100%)] text-slate-950">
+      {cameraSecurity.enabled && cameraStream ? (
+        <div
+          className="fixed z-50 w-36 touch-none overflow-hidden rounded-[8px] border border-white/70 bg-slate-950 shadow-xl sm:w-44"
+          style={{ left: cameraPosition.x, top: cameraPosition.y }}
+          onPointerDown={startCameraDrag}
+          onPointerMove={moveCameraDrag}
+          onPointerUp={stopCameraDrag}
+          onPointerCancel={stopCameraDrag}
+          title="Drag camera preview"
+        >
+          <video ref={cameraVideoRef} autoPlay muted playsInline className="aspect-video w-full bg-slate-950 object-cover" />
+          <div className="flex cursor-move items-center justify-between gap-2 bg-slate-950 px-2 py-1.5 text-[11px] font-semibold text-white">
+            <span className="inline-flex items-center gap-1">
+              <Camera size={12} />
+              Camera on
+            </span>
+            <span>Drag · {cameraEvents}/{cameraSecurity.maxEvents}</span>
+          </div>
+        </div>
+      ) : null}
       <header className="sticky top-0 z-30 border-b border-slate-200/80 bg-white/95 shadow-sm backdrop-blur">
         <div className="flex min-h-16 items-center justify-between gap-3 px-3 sm:px-5">
           <div className="flex items-center gap-3">
