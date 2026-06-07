@@ -299,6 +299,7 @@ export function AssessmentShell({
   const [testResults, setTestResults] = useState<TestResultsOutput | null>(null);
   const [animatingTestIndex, setAnimatingTestIndex] = useState<number>(-1);
   const resultsRef = useRef<HTMLDivElement>(null);
+  const autoSubmitStartedRef = useRef(false);
 
   const activeIndex = questions.findIndex((question) => question.id === activeQuestionId);
   const activeQuestion = questions[Math.max(0, activeIndex)];
@@ -682,7 +683,7 @@ export function AssessmentShell({
     scrollToResults();
   }
 
-  function saveNow() {
+  const saveNow = useCallback(() => {
     localStorage.setItem(
       storageKey,
       JSON.stringify({
@@ -695,9 +696,9 @@ export function AssessmentShell({
       }),
     );
     setLastSavedAt(new Date());
-  }
+  }, [activeQuestionId, activeSection, answers, storageKey, tabEvents]);
 
-  async function submitAssessment() {
+  const submitAssessment = useCallback(async (submissionMode: "manual" | "auto" = "manual") => {
     if (isExecuting || isFinalizing) return;
 
     saveNow();
@@ -713,10 +714,11 @@ export function AssessmentShell({
           submitted_at: new Date().toISOString(),
           duration_minutes: assessmentBank.assessment.duration_minutes,
           tab_events: tabEvents,
+          submission_mode: submissionMode,
           answers,
         }),
       });
-      const payload = (await response.json().catch(() => null)) as { message?: string } | null;
+      const payload = (await response.json().catch(() => null)) as { attempt_id?: string; message?: string } | null;
 
       if (!response.ok) {
         throw new Error(payload?.message || `Final submission failed with status ${response.status}`);
@@ -724,7 +726,10 @@ export function AssessmentShell({
 
       localStorage.removeItem(storageKey);
       localStorage.removeItem(`${storageKey}:startedAt`);
-      router.replace("/dashboard");
+      const reportPath = payload?.attempt_id
+        ? `/assessment/report?attemptId=${encodeURIComponent(payload.attempt_id)}&mode=${submissionMode}`
+        : `/assessment/report?mode=${submissionMode}`;
+      router.replace(reportPath);
       router.refresh();
     } catch (error) {
       updateActiveAnswer({
@@ -734,7 +739,26 @@ export function AssessmentShell({
     } finally {
       setIsFinalizing(false);
     }
-  }
+  }, [
+    answers,
+    assessmentBank.assessment.duration_minutes,
+    assessmentBank.assessment.id,
+    assessmentInstanceId,
+    isExecuting,
+    isFinalizing,
+    router,
+    saveNow,
+    storageKey,
+    tabEvents,
+    updateActiveAnswer,
+  ]);
+
+  useEffect(() => {
+    if (!hasHydrated || remainingSeconds > 0 || isExecuting || isFinalizing || autoSubmitStartedRef.current) return;
+
+    autoSubmitStartedRef.current = true;
+    void submitAssessment("auto");
+  }, [hasHydrated, isExecuting, isFinalizing, remainingSeconds, submitAssessment]);
 
   const attempted = Object.values(answers).filter((answer) => answer.status !== "unvisited").length;
   const submitted = Object.values(answers).filter((answer) => answer.status === "submitted").length;
@@ -783,7 +807,7 @@ export function AssessmentShell({
             </button>
             <button
               type="button"
-              onClick={submitAssessment}
+              onClick={() => void submitAssessment("manual")}
               disabled={isExecuting || isFinalizing}
               className="inline-flex h-10 items-center gap-2 rounded-[8px] bg-emerald-700 px-3 text-sm font-semibold text-white shadow-sm shadow-emerald-900/10 hover:bg-emerald-800 disabled:opacity-40"
             >
@@ -940,7 +964,9 @@ export function AssessmentShell({
                     {activeQuestion.marks || 5} marks
                   </span>
                 </div>
-                <h2 className="mt-2 text-xl font-semibold tracking-[-0.02em] text-slate-950">{activeQuestion.title}</h2>
+                {activeQuestion.section !== "MCQ" ? (
+                  <h2 className="mt-2 text-xl font-semibold tracking-[-0.02em] text-slate-950">{activeQuestion.title}</h2>
+                ) : null}
               </div>
               <div className="flex items-center gap-2 text-xs text-slate-600">
                 {isTimedOut || isSectionTimedOut ? (
@@ -1058,8 +1084,6 @@ export function AssessmentShell({
                   onClick={submitQuestion}
                   disabled={isExecuting || isTimedOut || isSectionTimedOut}
                   className="inline-flex h-10 items-center gap-2 rounded-[10px] bg-emerald-700 px-3 text-sm font-semibold text-white shadow-sm shadow-emerald-900/10 hover:bg-emerald-800 disabled:opacity-40"
-                  disabled={isExecuting}
-                  className="inline-flex h-10 items-center gap-2 rounded-[8px] bg-emerald-700 px-3 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-40"
                 >
                   <CheckCircle2 size={16} />
                   Submit Question
@@ -1218,6 +1242,7 @@ function QuestionPrompt({ question, visible }: { question: AssessmentQuestion; v
         </div>
       ) : null}
 
+      {/*
       {question.expected_approach?.length ? (
         <div className="mt-4 rounded-[12px] border border-amber-200 bg-amber-50 p-3">
           <div className="flex items-center gap-2 text-sm font-semibold text-amber-900">
@@ -1233,6 +1258,7 @@ function QuestionPrompt({ question, visible }: { question: AssessmentQuestion; v
           </div>
         </div>
       ) : null}
+      */}
 
       {question.test_cases?.length ? (
         <div className="mt-4">
