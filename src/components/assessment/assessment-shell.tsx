@@ -37,6 +37,7 @@ type AnswerState = {
   submissions: number;
   status: "unvisited" | "saved" | "ran" | "submitted";
   resultMessage: string;
+  sqlExecutionMs: number | null;
 };
 
 type ActiveTab = "problem" | "answer" | "results";
@@ -118,6 +119,7 @@ function initialAnswer(question: AssessmentQuestion): AnswerState {
     submissions: 0,
     status: "unvisited",
     resultMessage: "No run yet.",
+    sqlExecutionMs: null,
   };
 }
 
@@ -747,6 +749,7 @@ export function AssessmentShell({
         runs: action === "run" ? activeAnswer.runs + 1 : activeAnswer.runs,
         submissions: action === "submit" ? activeAnswer.submissions + 1 : activeAnswer.submissions,
         status: action === "submit" ? "submitted" : "ran",
+        sqlExecutionMs: typeof payload?.execution_ms === "number" ? payload.execution_ms : null,
         resultMessage: payload?.error
           ? `SQL error:\n${payload.error}`
           : `SQL completed. Rows: ${payload?.row_count ?? 0}. Execution: ${payload?.execution_ms ?? 0} ms.`,

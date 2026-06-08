@@ -4,6 +4,7 @@ import { supabaseServer } from "@/lib/supabase-server";
 function backendBaseUrl() {
   return (
     process.env.BACKEND_API_URL ||
+    process.env.NEXT_PUBLIC_BACKEND_URL ||
     process.env.NEXT_PUBLIC_API_URL ||
     "http://localhost:3001"
   ).replace(/\/$/, "");
@@ -33,7 +34,15 @@ export async function POST(request: NextRequest) {
       student_email: user.email,
     }),
     cache: "no-store",
+  }).catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : "Backend is unreachable";
+    return NextResponse.json(
+      { message: `Assessment backend is unreachable: ${message}` },
+      { status: 502 },
+    );
   });
+
+  if (response instanceof NextResponse) return response;
 
   const payload = await response.json().catch(() => ({
     message: `Assessment finalization failed with status ${response.status}`,
