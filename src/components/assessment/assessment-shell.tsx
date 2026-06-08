@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  AlertTriangle,
   BookOpen,
   Camera,
   CameraOff,
@@ -335,7 +334,23 @@ export function AssessmentShell({
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isRequestingCamera, setIsRequestingCamera] = useState(false);
-  const [cameraPosition, setCameraPosition] = useState<CameraPosition>(() => defaultCameraPosition());
+  const [cameraPosition, setCameraPosition] = useState<CameraPosition>(() => {
+    if (typeof window === "undefined") return defaultCameraPosition();
+
+    const rawPosition = window.localStorage.getItem(`assessment:${assessmentBank.assessment.id}:cameraPosition`);
+    if (!rawPosition) return defaultCameraPosition();
+
+    try {
+      const parsed = JSON.parse(rawPosition) as Partial<CameraPosition>;
+      return clampCameraPosition({
+        x: Number(parsed.x || 16),
+        y: Number(parsed.y || 16),
+      });
+    } catch {
+      window.localStorage.removeItem(`assessment:${assessmentBank.assessment.id}:cameraPosition`);
+      return defaultCameraPosition();
+    }
+  });
   const [sqlResult, setSqlResult] = useState<SqlRunResponse | null>(null);
   const [testResults, setTestResults] = useState<TestResultsOutput | null>(null);
   const [animatingTestIndex, setAnimatingTestIndex] = useState<number>(-1);
@@ -527,27 +542,6 @@ export function AssessmentShell({
   }, [cameraSecurity.enabled, storageKey]);
 
   const cameraPositionKey = `${storageKey}:cameraPosition`;
-
-  useEffect(() => {
-    if (!cameraSecurity.enabled) return;
-
-    const savedPosition = localStorage.getItem(cameraPositionKey);
-    if (!savedPosition) {
-      setCameraPosition(clampCameraPosition(defaultCameraPosition()));
-      return;
-    }
-
-    try {
-      const parsed = JSON.parse(savedPosition) as Partial<CameraPosition>;
-      setCameraPosition(clampCameraPosition({
-        x: Number(parsed.x || 16),
-        y: Number(parsed.y || 16),
-      }));
-    } catch {
-      localStorage.removeItem(cameraPositionKey);
-      setCameraPosition(clampCameraPosition(defaultCameraPosition()));
-    }
-  }, [cameraPositionKey, cameraSecurity.enabled]);
 
   useEffect(() => {
     if (!cameraSecurity.enabled) return;
@@ -852,19 +846,20 @@ export function AssessmentShell({
     setIsFinalizing(true);
 
     try {
+      const submissionBody = {
+        assessment_id: assessmentInstanceId || assessmentBank.assessment.id,
+        started_at: localStorage.getItem(`${storageKey}:startedAt`) || new Date().toISOString(),
+        submitted_at: new Date().toISOString(),
+        duration_minutes: assessmentBank.assessment.duration_minutes,
+        tab_events: tabEventsOverride ?? tabEvents,
+        camera_events: cameraEventsOverride ?? cameraEvents,
+        submission_mode: submissionMode,
+        answers,
+      };
       const response = await fetch("/api/assessment/finalize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          assessment_id: assessmentInstanceId || assessmentBank.assessment.id,
-          started_at: localStorage.getItem(`${storageKey}:startedAt`) || new Date().toISOString(),
-          submitted_at: new Date().toISOString(),
-          duration_minutes: assessmentBank.assessment.duration_minutes,
-          tab_events: tabEventsOverride ?? tabEvents,
-          camera_events: cameraEventsOverride ?? cameraEvents,
-          submission_mode: submissionMode,
-          answers,
-        }),
+        body: JSON.stringify(submissionBody),
       });
       const payload = (await response.json().catch(() => null)) as { attempt_id?: string; message?: string } | null;
 
@@ -872,6 +867,9 @@ export function AssessmentShell({
         throw new Error(payload?.message || `Final submission failed with status ${response.status}`);
       }
 
+      if (payload?.attempt_id) {
+        localStorage.setItem(`assessment-finalize:${payload.attempt_id}`, JSON.stringify(submissionBody));
+      }
       localStorage.removeItem(storageKey);
       localStorage.removeItem(`${storageKey}:startedAt`);
       const reportPath = payload?.attempt_id
