@@ -1,6 +1,7 @@
 import { CheckCircle2, Home, ListChecks } from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { FinalizeStageRunner } from "@/components/assessment/finalize-stage-runner";
 import { sectionOrder } from "@/data/assessment-bank";
 import { supabaseService } from "@/lib/supabase-service";
 import { supabaseServer } from "@/lib/supabase-server";
@@ -129,6 +130,7 @@ export default async function AssessmentReportPage({ searchParams }: PageProps) 
               <p className="mt-3 text-sm leading-6 text-emerald-50">
                 {report.assessment_title || "Assessment"} was submitted on {formatDate(report.created_at)}.
               </p>
+              {report.attempt_id ? <FinalizeStageRunner attemptId={report.attempt_id} /> : null}
             </div>
             <Link
               href="/dashboard"

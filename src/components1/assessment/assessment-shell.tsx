@@ -546,27 +546,34 @@ export function AssessmentShell({
     setIsFinalizing(true);
 
     try {
+      const submissionBody = {
+        assessment_id: assessmentInstanceId || assessmentBank.assessment.id,
+        started_at: localStorage.getItem(`${storageKey}:startedAt`) || new Date().toISOString(),
+        submitted_at: new Date().toISOString(),
+        duration_minutes: assessmentBank.assessment.duration_minutes,
+        tab_events: tabEvents,
+        answers,
+      };
       const response = await fetch("/api/assessment/finalize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          assessment_id: assessmentInstanceId || assessmentBank.assessment.id,
-          started_at: localStorage.getItem(`${storageKey}:startedAt`) || new Date().toISOString(),
-          submitted_at: new Date().toISOString(),
-          duration_minutes: assessmentBank.assessment.duration_minutes,
-          tab_events: tabEvents,
-          answers,
-        }),
+        body: JSON.stringify(submissionBody),
       });
-      const payload = (await response.json().catch(() => null)) as { message?: string } | null;
+      const payload = (await response.json().catch(() => null)) as { attempt_id?: string; message?: string } | null;
 
       if (!response.ok) {
         throw new Error(payload?.message || `Final submission failed with status ${response.status}`);
       }
 
+      if (payload?.attempt_id) {
+        localStorage.setItem(`assessment-finalize:${payload.attempt_id}`, JSON.stringify(submissionBody));
+      }
       localStorage.removeItem(storageKey);
       localStorage.removeItem(`${storageKey}:startedAt`);
-      router.replace("/dashboard");
+      const reportPath = payload?.attempt_id
+        ? `/assessment/report?attemptId=${encodeURIComponent(payload.attempt_id)}`
+        : "/assessment/report";
+      router.replace(reportPath);
       router.refresh();
     } catch (error) {
       updateActiveAnswer({

@@ -1,11 +1,8 @@
 import {
-  AlertTriangle,
   ArrowLeft,
   BadgeCheck,
   BookOpen,
   Braces,
-  Building2,
-  CalendarClock,
   CheckCircle2,
   ChevronRight,
   CircleAlert,
@@ -143,13 +140,6 @@ function formatDate(value: string | null | undefined) {
   }).format(date);
 }
 
-function normalizeRisk(value: string | null | undefined) {
-  const risk = String(value || "").trim().toLowerCase();
-  if (risk === "high") return "High";
-  if (risk === "medium") return "Medium";
-  return "Low";
-}
-
 function normalizeBucket(value: string | null | undefined, label: string | null | undefined): ReadinessBucket {
   const bucket = String(value || "").trim().toLowerCase();
   if (bucket === "ready") return "Ready";
@@ -202,6 +192,15 @@ function aiOutput(value: unknown) {
 function aiQuestionTitle(value: unknown, questionId: string) {
   const output = aiOutput(value);
   return String(output?.question_title || questionId);
+}
+
+function outputText(output: Record<string, unknown> | null, key: string) {
+  const value = output?.[key];
+  return typeof value === "string" && value.trim() ? value : "Unknown";
+}
+
+function outputScore(output: Record<string, unknown> | null, key: string) {
+  return score(typeof output?.[key] === "number" ? output[key] : null);
 }
 
 export default async function AttemptReportCardPage({
@@ -530,6 +529,7 @@ export default async function AttemptReportCardPage({
                 const mcq = mcqByQuestionId.get(question.question_id);
                 const title = evaluation ? aiQuestionTitle(evaluation.ai_evaluation, question.question_id) : question.question_id;
                 const evaluationOutput = aiOutput(evaluation?.ai_evaluation);
+                const showDsaComplexity = group.section === "DSA";
                 const mcqScoreLabel =
                   mcq?.is_correct === null || mcq?.is_correct === undefined
                     ? "Pending"
@@ -591,6 +591,35 @@ export default async function AttemptReportCardPage({
                             <div className="mt-3 grid gap-2 text-sm text-slate-700">
                               <p>Selected options: {asStringArray(mcq?.selected_options).join(", ") || "-"}</p>
                               <p>Correct: {mcq?.is_correct === null || mcq?.is_correct === undefined ? "-" : mcq.is_correct ? "Yes" : "No"}</p>
+                            </div>
+                          </div>
+                        ) : null}
+
+                        {showDsaComplexity ? (
+                          <div className="rounded-[8px] border border-slate-200 bg-white p-3">
+                            <div className="flex items-center gap-2 text-slate-900">
+                              <Gauge size={16} />
+                              <p className="text-sm font-semibold">DSA Complexity</p>
+                            </div>
+                            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                              <div className="rounded-[8px] border border-slate-200 bg-slate-50 p-3">
+                                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Time Complexity</p>
+                                <p className="mt-2 text-sm font-semibold text-slate-950">
+                                  {outputText(evaluationOutput, "likely_time_complexity")}
+                                </p>
+                                <p className="mt-1 text-xs text-slate-600">
+                                  Score {outputScore(evaluationOutput, "time_complexity_score")}
+                                </p>
+                              </div>
+                              <div className="rounded-[8px] border border-slate-200 bg-slate-50 p-3">
+                                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Space Complexity</p>
+                                <p className="mt-2 text-sm font-semibold text-slate-950">
+                                  {outputText(evaluationOutput, "likely_space_complexity")}
+                                </p>
+                                <p className="mt-1 text-xs text-slate-600">
+                                  Score {outputScore(evaluationOutput, "space_complexity_score")}
+                                </p>
+                              </div>
                             </div>
                           </div>
                         ) : null}
