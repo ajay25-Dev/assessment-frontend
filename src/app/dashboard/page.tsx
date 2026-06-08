@@ -119,6 +119,11 @@ function normalizeCompilation(value: string | null | undefined): CompilationBeha
 
 function normalizeReadiness(value: string | null | undefined): ReadinessLabel {
   const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "ready") return "Strong Company Ready";
+  if (normalized === "training needed") return "Trainable but Not Ready";
+  if (normalized === "failed") return "Not Ready";
+  if (normalized === "needs practice") return "Trainable but Not Ready";
+  if (normalized === "at risk") return "Not Ready";
   if (normalized === "elite 1% company ready") return "Elite 1% Company Ready";
   if (normalized === "strong company ready") return "Strong Company Ready";
   if (normalized === "near ready") return "Near Ready";
