@@ -12,6 +12,7 @@ import { supabaseBrowser } from "@/lib/supabase-browser";
 
 const signupSchema = z
   .object({
+    fullName: z.string().trim().min(2, "Enter the student's full name"),
     email: z.string().email("Enter a valid email address"),
     password: z.string().min(6, "Password must be at least 6 characters"),
     confirmPassword: z.string().min(6, "Confirm your password"),
@@ -30,17 +31,17 @@ export function SignupForm() {
 
   const form = useForm<SignupValues>({
     resolver: zodResolver(signupSchema),
-    defaultValues: { email: "", password: "", confirmPassword: "" },
+    defaultValues: { fullName: "", email: "", password: "", confirmPassword: "" },
   });
 
   const onSubmit = async (values: SignupValues) => {
     setSubmitting(true);
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
-      const response = await fetch(`${apiUrl.replace(/\/$/, "")}/auth/signup`, {
+      const response = await fetch("/api/auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          fullName: values.fullName.trim(),
           email: values.email.trim().toLowerCase(),
           password: values.password,
         }),
@@ -94,6 +95,19 @@ export function SignupForm() {
       </div>
 
       <form className="space-y-4" onSubmit={form.handleSubmit(onSubmit)}>
+        <label className="block">
+          <span className="text-sm font-medium text-slate-700">Full name</span>
+          <input
+            type="text"
+            autoComplete="name"
+            className="mt-2 h-11 w-full rounded-[8px] border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-emerald-600 focus:ring-4 focus:ring-emerald-600/10"
+            {...form.register("fullName")}
+          />
+          {form.formState.errors.fullName ? (
+            <span className="mt-1 block text-sm text-red-600">{form.formState.errors.fullName.message}</span>
+          ) : null}
+        </label>
+
         <label className="block">
           <span className="text-sm font-medium text-slate-700">Email</span>
           <input

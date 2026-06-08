@@ -9,14 +9,14 @@ function backendBaseUrl() {
   ).replace(/\/$/, "");
 }
 
-async function forwardCodeRequest(request: NextRequest, action: "run" | "submit") {
+export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => null);
 
-  if (!body || typeof body !== "object") {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
     return NextResponse.json({ message: "Invalid JSON body" }, { status: 400 });
   }
 
-  const response = await fetch(`${backendBaseUrl()}/code/${action}`, {
+  const response = await fetch(`${backendBaseUrl()}/auth/signup`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -24,7 +24,7 @@ async function forwardCodeRequest(request: NextRequest, action: "run" | "submit"
   }).catch((error: unknown) => {
     const message = error instanceof Error ? error.message : "Backend is unreachable";
     return NextResponse.json(
-      { message: `Compiler backend is unreachable: ${message}` },
+      { message: `Signup backend is unreachable: ${message}` },
       { status: 502 },
     );
   });
@@ -32,12 +32,8 @@ async function forwardCodeRequest(request: NextRequest, action: "run" | "submit"
   if (response instanceof NextResponse) return response;
 
   const payload = await response.json().catch(() => ({
-    message: `Compiler request failed with status ${response.status}`,
+    message: `Signup failed with status ${response.status}`,
   }));
 
   return NextResponse.json(payload, { status: response.status });
-}
-
-export async function POST(request: NextRequest) {
-  return forwardCodeRequest(request, "submit");
 }

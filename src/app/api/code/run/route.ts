@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 function backendBaseUrl() {
   return (
     process.env.BACKEND_API_URL ||
+    process.env.NEXT_PUBLIC_BACKEND_URL ||
     process.env.NEXT_PUBLIC_API_URL ||
     "http://localhost:3001"
   ).replace(/\/$/, "");
@@ -20,7 +21,15 @@ async function forwardCodeRequest(request: NextRequest, action: "run" | "submit"
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
     cache: "no-store",
+  }).catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : "Backend is unreachable";
+    return NextResponse.json(
+      { message: `Compiler backend is unreachable: ${message}` },
+      { status: 502 },
+    );
   });
+
+  if (response instanceof NextResponse) return response;
 
   const payload = await response.json().catch(() => ({
     message: `Compiler request failed with status ${response.status}`,
