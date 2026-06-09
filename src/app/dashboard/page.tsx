@@ -83,6 +83,31 @@ type AvailableAssessment = {
   subjects: string[];
 };
 
+type AssessmentReportRow = {
+  assessment_id: string | null;
+  attempt_id: string | null;
+  report_json: { integrity?: { status?: string } } | null;
+  created_at: string | null;
+};
+
+type AssessmentAttemptRow = {
+  id: string;
+  created_at: string | null;
+  client_metadata: {
+    source_assessment_id?: string;
+    integrity_status?: string;
+    submission_mode?: string;
+  } | null;
+};
+
+type AvailableAssessmentCard = AvailableAssessment & {
+  attemptId: string | null;
+  cardLabel: string;
+  ctaLabel: string;
+  ctaHref: string;
+  cardTone: "available" | "completed" | "disqualified";
+};
+
 function clampScore(value: number | null | undefined) {
   const score = Number(value || 0);
   if (!Number.isFinite(score)) return 0;
@@ -207,7 +232,7 @@ function ScoreCard({
   );
 }
 
-function AvailableAssessments({ assessments }: { assessments: AvailableAssessment[] }) {
+function AvailableAssessments({ assessments }: { assessments: AvailableAssessmentCard[] }) {
   if (assessments.length === 0) {
     return (
       <article className="rounded-[8px] border border-amber-200 bg-amber-50 p-5">
@@ -225,9 +250,26 @@ function AvailableAssessments({ assessments }: { assessments: AvailableAssessmen
   return (
     <div className="grid gap-4">
       {assessments.map((assessment) => (
-        <article key={assessment.id} className="rounded-[8px] border border-emerald-200 bg-emerald-50 p-5">
-          <p className="text-sm font-semibold uppercase tracking-[0.16em] text-emerald-800">
-            Test Available
+        <article
+          key={assessment.id}
+          className={`rounded-[8px] p-5 ${
+            assessment.cardTone === "available"
+              ? "border border-emerald-200 bg-emerald-50"
+              : assessment.cardTone === "completed"
+                ? "border border-sky-200 bg-sky-50"
+                : "border border-red-200 bg-red-50"
+          }`}
+        >
+          <p
+            className={`text-sm font-semibold uppercase tracking-[0.16em] ${
+              assessment.cardTone === "available"
+                ? "text-emerald-800"
+                : assessment.cardTone === "completed"
+                  ? "text-sky-800"
+                  : "text-red-800"
+            }`}
+          >
+            {assessment.cardLabel}
           </p>
           <h2 className="mt-3 text-2xl font-semibold text-slate-950">
             {assessment.title || "Placement Readiness Assessment"}
@@ -267,10 +309,16 @@ function AvailableAssessments({ assessments }: { assessments: AvailableAssessmen
             ))}
           </div>
           <Link
-            href={`/assessment/start?assessmentId=${assessment.id}`}
-            className="mt-5 inline-flex h-11 items-center justify-center rounded-[8px] bg-emerald-700 px-5 text-sm font-semibold text-white hover:bg-emerald-800"
+            href={assessment.ctaHref}
+            className={`mt-5 inline-flex h-11 items-center justify-center rounded-[8px] px-5 text-sm font-semibold text-white ${
+              assessment.cardTone === "available"
+                ? "bg-emerald-700 hover:bg-emerald-800"
+                : assessment.cardTone === "completed"
+                  ? "bg-sky-700 hover:bg-sky-800"
+                  : "bg-red-700 hover:bg-red-800"
+            }`}
           >
-            Start Test
+            {assessment.ctaLabel}
           </Link>
         </article>
       ))}
@@ -330,7 +378,7 @@ export default async function DashboardPage() {
   const studentBatchIds = Array.from(
     new Set((studentBatchRows || []).map((row) => row.batch_id).filter(Boolean)),
   );
-  let availableAssessments: AvailableAssessment[] = [];
+  let availableAssessmentCards: AvailableAssessmentCard[] = [];
 
   if (studentBatchIds.length > 0) {
     const { data: assessmentBatchRows, error: assessmentBatchError } = await serviceSupabase
@@ -395,10 +443,53 @@ export default async function DashboardPage() {
         return map;
       }, new Map());
 
-      availableAssessments = (availableAssessmentRows || []).map((assessment) => ({
-        ...assessment,
-        subjects: subjectsByAssessmentId.get(assessment.id) || [],
-      })) as AvailableAssessment[];
+      const { data: assessmentAttemptRows, error: assessmentAttemptError } = await serviceSupabase
+        .from("student_assessment_attempts")
+        .select("id,created_at,client_metadata")
+        .eq("student_id", user.id)
+        .order("created_at", { ascending: false });
+
+      if (assessmentAttemptError) {
+        throw new Error(`Could not load assessment attempt states: ${assessmentAttemptError.message}`);
+      }
+
+      const latestAttemptByAssessmentId = (assessmentAttemptRows || []).reduce<Map<string, AssessmentAttemptRow>>(
+        (map, row) => {
+          const sourceAssessmentId = row.client_metadata?.source_assessment_id;
+          if (!sourceAssessmentId || !assessmentIds.includes(sourceAssessmentId)) return map;
+          if (!map.has(sourceAssessmentId)) {
+            map.set(sourceAssessmentId, row as AssessmentAttemptRow);
+          }
+          return map;
+        },
+        new Map(),
+      );
+
+      availableAssessmentCards = (availableAssessmentRows || []).map((assessment) => {
+        const assessmentWithSubjects: AvailableAssessment = {
+          ...assessment,
+          subjects: subjectsByAssessmentId.get(assessment.id) || [],
+        };
+        const latestAttempt = latestAttemptByAssessmentId.get(assessment.id) || null;
+        const isDisqualified = latestAttempt?.client_metadata?.integrity_status === "disqualified";
+        const hasCompletedAssessment = Boolean(latestAttempt?.id);
+
+        return {
+          ...assessmentWithSubjects,
+          attemptId: latestAttempt?.id || null,
+          cardLabel: !hasCompletedAssessment
+            ? "Test Available"
+            : isDisqualified
+              ? "Assessment Disqualified"
+              : "Test Completed",
+          ctaLabel: !hasCompletedAssessment ? "Start Test" : isDisqualified ? "Disqualified" : "Completed",
+          ctaHref:
+            hasCompletedAssessment && latestAttempt?.id
+              ? `/assessment/report?attemptId=${encodeURIComponent(latestAttempt.id)}`
+              : `/assessment/start?assessmentId=${assessment.id}`,
+          cardTone: !hasCompletedAssessment ? "available" : isDisqualified ? "disqualified" : "completed",
+        };
+      });
     }
   }
 
@@ -545,7 +636,7 @@ export default async function DashboardPage() {
             <h3 className="font-semibold text-slate-950">Available Assessments</h3>
             <p className="mt-1 text-sm text-slate-600">Published tests assigned to your batch.</p>
           </div>
-          <AvailableAssessments assessments={availableAssessments} />
+          <AvailableAssessments assessments={availableAssessmentCards} />
         </section>
 
         <section className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">

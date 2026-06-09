@@ -718,7 +718,7 @@ export function AssessmentShell({
                 ) : null}
                 <span className="rounded-[8px] border border-slate-200 px-2 py-1">Runs {activeAnswer.runs}</span>
                 <span className="rounded-[8px] border border-slate-200 px-2 py-1">Submits {activeAnswer.submissions}</span>
-                <span className="rounded-[8px] border border-slate-200 px-2 py-1">Tab events {tabEvents}</span>
+                {/* <span className="rounded-[8px] border border-slate-200 px-2 py-1">Tab events {tabEvents}</span> */}
               </div>
             </div>
 
