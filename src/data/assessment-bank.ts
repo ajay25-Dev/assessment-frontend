@@ -20,6 +20,9 @@ export type AssessmentQuestion = {
   constraints?: string[];
   function_signature?: string;
   expected_approach?: string[];
+  evaluator_context?: unknown;
+  schema_ref?: string;
+  misconception_mapping?: unknown;
   test_cases?: Array<{
     number: number;
     input: string;

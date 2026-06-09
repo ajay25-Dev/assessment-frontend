@@ -28,7 +28,7 @@ export function McqPanel({ question, selected, onChange }: McqPanelProps) {
         return (
           <label
             key={option.label}
-            className={`flex cursor-pointer gap-3 rounded-[8px] border p-4 text-sm transition ${
+            className={`grid grid-cols-[18px_1fr] gap-3 rounded-[8px] border p-4 text-sm transition ${
               checked ? "border-emerald-300 bg-emerald-50 text-emerald-950" : "border-slate-200 bg-white text-slate-800 hover:border-slate-300"
             }`}
           >
@@ -39,8 +39,10 @@ export function McqPanel({ question, selected, onChange }: McqPanelProps) {
               onChange={() => toggle(option.label)}
               className="mt-1"
             />
-            <span className="font-semibold">{option.label}</span>
-            <span className="leading-6">{option.text}</span>
+            <div className="min-w-0">
+              <span className="block font-semibold">{option.label}</span>
+              <span className="block break-words leading-6">{option.text}</span>
+            </div>
           </label>
         );
       })}

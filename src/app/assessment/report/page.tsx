@@ -1,4 +1,4 @@
-import { CheckCircle2, Home, ListChecks } from "lucide-react";
+import { CheckCircle2, Home, ListChecks, ShieldAlert } from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { FinalizeStageRunner } from "@/components/assessment/finalize-stage-runner";
@@ -23,6 +23,16 @@ type ReportRow = {
   faculty_insight: string | null;
   company_recommendation: string | null;
   created_at: string | null;
+  report_json: unknown;
+};
+
+type IntegrityReport = {
+  integrity?: {
+    status?: string;
+    source?: string;
+    message?: string;
+    event_count?: number;
+  };
 };
 
 type QuestionAttemptRow = {
@@ -75,6 +85,7 @@ export default async function AssessmentReportPage({ searchParams }: PageProps) 
         "faculty_insight",
         "company_recommendation",
         "created_at",
+        "report_json",
       ].join(","),
     )
     .eq("student_id", user.id)
@@ -92,6 +103,9 @@ export default async function AssessmentReportPage({ searchParams }: PageProps) 
 
   const report = (((reportRows || [])[0] || null) as unknown) as ReportRow | null;
   if (!report) redirect("/dashboard");
+  const reportJson = (report.report_json || {}) as IntegrityReport;
+  const integrity = reportJson.integrity;
+  const isDisqualified = integrity?.status === "disqualified";
 
   const { data: questionRows, error: questionError } = report.attempt_id
     ? await serviceSupabase
@@ -121,15 +135,20 @@ export default async function AssessmentReportPage({ searchParams }: PageProps) 
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <p className="inline-flex items-center gap-2 rounded-[8px] bg-white/12 px-3 py-1 text-sm font-semibold text-emerald-50">
-                <CheckCircle2 size={16} />
-                {isAutoSubmitted ? "Auto submitted after time over" : "Assessment submitted"}
+                {isDisqualified ? <ShieldAlert size={16} /> : <CheckCircle2 size={16} />}
+                {isDisqualified ? "Assessment disqualified" : isAutoSubmitted ? "Auto submitted after time over" : "Assessment submitted"}
               </p>
               <h1 className="mt-4 text-2xl font-semibold tracking-[-0.02em] sm:text-3xl">
-                Thank you your assessment is submitted here is the details
+                {isDisqualified ? "The assessment ended because an integrity violation was detected." : "Thank you your assessment is submitted here is the details"}
               </h1>
               <p className="mt-3 text-sm leading-6 text-emerald-50">
                 {report.assessment_title || "Assessment"} was submitted on {formatDate(report.created_at)}.
               </p>
+              {isDisqualified ? (
+                <p className="mt-3 max-w-3xl rounded-[10px] border border-white/15 bg-white/10 px-4 py-3 text-sm leading-6 text-emerald-50">
+                  {integrity?.message || "Cheating signals from tab or camera activity stopped the assessment and marked the attempt as disqualified."}
+                </p>
+              ) : null}
               {report.attempt_id ? <FinalizeStageRunner attemptId={report.attempt_id} /> : null}
             </div>
             <Link

@@ -2,12 +2,24 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { AssessmentShell } from "@/components/assessment/assessment-shell";
 import { fetchAssessmentBank } from "@/lib/assessment-bank-api";
+import { supabaseService } from "@/lib/supabase-service";
 import { supabaseServer } from "@/lib/supabase-server";
 
 export const dynamic = "force-dynamic";
 
 type PageProps = {
   searchParams?: Promise<{ assessmentId?: string }> | { assessmentId?: string };
+};
+
+type AssessmentAttemptRow = {
+  id: string;
+  created_at: string | null;
+  status: string | null;
+  client_metadata: {
+    source_assessment_id?: string;
+    integrity_status?: string;
+    submission_mode?: string;
+  } | null;
 };
 
 export default async function AssessmentTestPage({ searchParams }: PageProps) {
@@ -21,6 +33,33 @@ export default async function AssessmentTestPage({ searchParams }: PageProps) {
   if (!user) {
     const next = assessmentId ? `/assessment/test?assessmentId=${assessmentId}` : "/assessment/test";
     redirect(`/login?next=${encodeURIComponent(next)}`);
+  }
+
+  const serviceSupabase = supabaseService();
+  const { data: attemptData, error: attemptError } = await serviceSupabase
+    .from("student_assessment_attempts")
+    .select("id,created_at,status,client_metadata")
+    .eq("student_id", user.id)
+    .order("created_at", { ascending: false })
+    .limit(50);
+
+  if (attemptError) {
+    throw new Error(`Could not load assessment attempt status: ${attemptError.message}`);
+  }
+
+  const attemptRows = (attemptData || []) as AssessmentAttemptRow[];
+  const finalStatuses = new Set(["submitted", "auto_submitted", "disqualified"]);
+  const isFinalAttempt = (row: AssessmentAttemptRow) =>
+    finalStatuses.has(row.status || "") || row.client_metadata?.integrity_status === "disqualified";
+  const terminalAttempt =
+    attemptRows.find((row) => {
+      if (!isFinalAttempt(row)) return false;
+      return assessmentId ? row.client_metadata?.source_assessment_id === assessmentId : true;
+    }) || null;
+
+  const redirectAttemptId = terminalAttempt?.id || null;
+  if (redirectAttemptId) {
+    redirect(`/assessment/report?attemptId=${encodeURIComponent(redirectAttemptId)}`);
   }
 
   const assessmentBank = await fetchAssessmentBank().catch((error: unknown) => {
@@ -48,5 +87,5 @@ export default async function AssessmentTestPage({ searchParams }: PageProps) {
     );
   }
 
-  return <AssessmentShell assessmentBank={assessmentBank} assessmentInstanceId={assessmentId} />;
+  return <AssessmentShell assessmentBank={assessmentBank} assessmentInstanceId={assessmentId} studentId={user.id} />;
 }

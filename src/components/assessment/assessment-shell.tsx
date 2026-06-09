@@ -18,6 +18,7 @@ import {
   Play,
   Save,
   Send,
+  ShieldAlert,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
@@ -69,6 +70,27 @@ type TestResultsOutput = {
   passed: number;
 };
 
+type SubmittedInputDebug = {
+  submittedAt: string;
+  endpoint: string;
+  method: "POST";
+  body: Record<string, unknown>;
+};
+
+type AiEvaluationDebug = {
+  requestedAt: string;
+  endpoint: string;
+  input: Record<string, unknown>;
+  output?: unknown;
+  error?: string;
+};
+
+type IntegrityViolation = {
+  eventCount: number;
+  message: string;
+  source: "tab_switch" | "camera";
+};
+
 const defaultLanguage = "python";
 const defaultSectionDurations: Record<AssessmentSectionId, number> = {
   DSA: 90,
@@ -87,6 +109,19 @@ type SqlRunResponse = {
   error?: string;
   message?: string;
 };
+
+function sameStringSet(left: string[], right: string[]) {
+  if (left.length !== right.length) return false;
+  const rightSet = new Set(right);
+  return left.every((item) => rightSet.has(item));
+}
+
+function evaluationEndpointForQuestion(question: AssessmentQuestion) {
+  if (question.section === "SQL") return "sql";
+  if (question.section === "OOPs") return "oops";
+  if (question.section === "MCQ") return "mcq";
+  return "dsa";
+}
 
 function visibleTestResultsForQuestion(question: AssessmentQuestion): TestResultsOutput | null {
   const cases = question.open_test_cases?.length ? question.open_test_cases : question.test_cases?.slice(0, 5) || [];
@@ -177,8 +212,13 @@ function createInitialAnswers(questions: AssessmentQuestion[]) {
   return Object.fromEntries(questions.map((question) => [question.id, initialAnswer(question)]));
 }
 
-function storageKeyForBank(assessmentBank: AssessmentBank, assessmentInstanceId?: string) {
-  return `joraiq-assessment:${assessmentInstanceId || assessmentBank.assessment.id}`;
+function assessmentStorageScope(assessmentBank: AssessmentBank, assessmentInstanceId?: string) {
+  return assessmentInstanceId || assessmentBank.assessment.id;
+}
+
+function storageKeyForBank(assessmentBank: AssessmentBank, assessmentInstanceId?: string, studentId?: string) {
+  const assessmentScope = assessmentStorageScope(assessmentBank, assessmentInstanceId);
+  return `joraiq-assessment:${studentId || "anonymous"}:${assessmentScope}`;
 }
 
 function sectionDurations(assessmentBank: AssessmentBank) {
@@ -262,9 +302,9 @@ function loadInitialSnapshot(assessmentBank: AssessmentBank) {
   };
 }
 
-function loadSavedSnapshot(assessmentBank: AssessmentBank, assessmentInstanceId?: string) {
+function loadSavedSnapshot(assessmentBank: AssessmentBank, assessmentInstanceId?: string, studentId?: string) {
   const questions = assessmentBank.questions;
-  const storageKey = storageKeyForBank(assessmentBank, assessmentInstanceId);
+  const storageKey = storageKeyForBank(assessmentBank, assessmentInstanceId, studentId);
   const fallback = loadInitialSnapshot(assessmentBank);
   if (typeof window === "undefined") return fallback;
 
@@ -307,13 +347,46 @@ function loadSavedSnapshot(assessmentBank: AssessmentBank, assessmentInstanceId?
 export function AssessmentShell({
   assessmentBank,
   assessmentInstanceId,
+  studentId,
 }: {
   assessmentBank: AssessmentBank;
   assessmentInstanceId?: string;
+  studentId?: string;
 }) {
   const router = useRouter();
   const questions = assessmentBank.questions;
-  const storageKey = storageKeyForBank(assessmentBank, assessmentInstanceId);
+  const storageKey = storageKeyForBank(assessmentBank, assessmentInstanceId, studentId);
+  const legacyStorageKey = `joraiq-assessment:${assessmentStorageScope(assessmentBank, assessmentInstanceId)}`;
+  
+  // Client-side guard: on mount, check database for existing attempts and redirect
+  // This catches cases where the server-side check was bypassed (e.g. no assessmentId in URL)
+  useEffect(() => {
+    if (!assessmentInstanceId) return;
+    
+    let cancelled = false;
+    fetch("/api/assessment/check-attempt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ assessment_id: assessmentInstanceId }),
+    })
+      .then((res) => res.json().catch(() => null) as Promise<{ hasAttempt: boolean; attemptId?: string } | null>)
+      .then((data) => {
+        if (cancelled) return;
+        if (data?.hasAttempt && data?.attemptId) {
+          localStorage.removeItem(storageKey);
+          localStorage.removeItem(`${storageKey}:startedAt`);
+          localStorage.removeItem(legacyStorageKey);
+          localStorage.removeItem(`${legacyStorageKey}:startedAt`);
+          router.replace(`/assessment/report?attemptId=${encodeURIComponent(data.attemptId)}`);
+        }
+      })
+      .catch(() => {
+        // Silently fail - the server-side check or finalize will catch this
+      });
+    
+    return () => { cancelled = true; };
+  }, [assessmentInstanceId, legacyStorageKey, router, storageKey]);
+  
   const [initialSnapshot] = useState(() => loadInitialSnapshot(assessmentBank));
   const [activeQuestionId, setActiveQuestionId] = useState(initialSnapshot.activeQuestionId);
   const [answers, setAnswers] = useState<Record<string, AnswerState>>(initialSnapshot.answers);
@@ -329,11 +402,11 @@ export function AssessmentShell({
   const [cameraEvents, setCameraEvents] = useState(initialSnapshot.cameraEvents);
   const [isExecuting, setIsExecuting] = useState(false);
   const [isFinalizing, setIsFinalizing] = useState(false);
-  const [securitySubmitTabEvents, setSecuritySubmitTabEvents] = useState<number | null>(null);
-  const [securitySubmitCameraEvents, setSecuritySubmitCameraEvents] = useState<number | null>(null);
+  const [integrityViolation, setIntegrityViolation] = useState<IntegrityViolation | null>(null);
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isRequestingCamera, setIsRequestingCamera] = useState(false);
+  const [isIntegrityLocked, setIsIntegrityLocked] = useState(false);
   const [cameraPosition, setCameraPosition] = useState<CameraPosition>(() => {
     if (typeof window === "undefined") return defaultCameraPosition();
 
@@ -353,6 +426,8 @@ export function AssessmentShell({
   });
   const [sqlResult, setSqlResult] = useState<SqlRunResponse | null>(null);
   const [testResults, setTestResults] = useState<TestResultsOutput | null>(null);
+  const [submittedInputDebugByQuestion, setSubmittedInputDebugByQuestion] = useState<Record<string, SubmittedInputDebug>>({});
+  const [aiEvaluationDebugByQuestion, setAiEvaluationDebugByQuestion] = useState<Record<string, AiEvaluationDebug>>({});
   const [animatingTestIndex, setAnimatingTestIndex] = useState<number>(-1);
   const resultsRef = useRef<HTMLDivElement>(null);
   const cameraVideoRef = useRef<HTMLVideoElement>(null);
@@ -363,13 +438,15 @@ export function AssessmentShell({
   const activeIndex = questions.findIndex((question) => question.id === activeQuestionId);
   const activeQuestion = questions[Math.max(0, activeIndex)];
   const activeAnswer = answers[activeQuestion.id] || initialAnswer(activeQuestion);
+  const activeSubmittedInputDebug = submittedInputDebugByQuestion[activeQuestion.id];
+  const activeAiEvaluationDebug = aiEvaluationDebugByQuestion[activeQuestion.id];
   const tabSecurity = useMemo(() => {
     const configured = assessmentBank.assessment.security;
     const envEnabled = publicEnvEnabled(process.env.NEXT_PUBLIC_ASSESSMENT_TAB_SECURITY_ENABLED);
     const envMaxEvents = publicEnvNumber(process.env.NEXT_PUBLIC_ASSESSMENT_TAB_SECURITY_MAX_EVENTS);
     return {
       enabled: envEnabled ?? configured?.tab_switch_protection_enabled ?? true,
-      maxEvents: envMaxEvents ?? configured?.max_tab_switch_events ?? 3,
+      maxEvents: envMaxEvents ?? configured?.max_tab_switch_events ?? 2,
       autoSubmitOnMax: configured?.auto_submit_on_max_events ?? true,
     };
   }, [assessmentBank.assessment.security]);
@@ -379,7 +456,7 @@ export function AssessmentShell({
     const envMaxEvents = publicEnvNumber(process.env.NEXT_PUBLIC_ASSESSMENT_CAMERA_MAX_EVENTS);
     return {
       enabled: envEnabled ?? configured?.camera_proctoring_enabled ?? false,
-      maxEvents: envMaxEvents ?? configured?.max_camera_events ?? 3,
+      maxEvents: envMaxEvents ?? configured?.max_camera_events ?? 2,
       autoSubmitOnMax: configured?.auto_submit_on_camera_events ?? true,
     };
   }, [assessmentBank.assessment.security]);
@@ -387,7 +464,9 @@ export function AssessmentShell({
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      const savedSnapshot = loadSavedSnapshot(assessmentBank, assessmentInstanceId);
+      localStorage.removeItem(legacyStorageKey);
+      localStorage.removeItem(`${legacyStorageKey}:startedAt`);
+      const savedSnapshot = loadSavedSnapshot(assessmentBank, assessmentInstanceId, studentId);
       setActiveQuestionId(savedSnapshot.activeQuestionId);
       setAnswers(savedSnapshot.answers);
       setActiveSection(savedSnapshot.activeSection);
@@ -399,7 +478,7 @@ export function AssessmentShell({
     }, 0);
 
     return () => window.clearTimeout(timer);
-  }, [assessmentBank, assessmentInstanceId]);
+  }, [assessmentBank, assessmentInstanceId, legacyStorageKey, studentId]);
 
   const questionsBySection = useMemo(
     () =>
@@ -498,23 +577,49 @@ export function AssessmentShell({
     [updateActiveAnswer],
   );
 
+  const disqualifyAssessment = useCallback((
+    source: IntegrityViolation["source"],
+    eventCount: number,
+    message: string,
+  ) => {
+    if (isFinalizing || autoSubmitStartedRef.current || isIntegrityLocked) return;
+
+    cameraStream?.getTracks().forEach((track) => track.stop());
+    setIntegrityViolation({ source, eventCount, message });
+    setIsIntegrityLocked(true);
+  }, [cameraStream, isFinalizing, isIntegrityLocked]);
+
+  const buildIntegrityMessage = useCallback((source: IntegrityViolation["source"], count: number) => {
+    if (source === "tab_switch") {
+      return count === 1
+        ? "Switching tabs or windows was detected. Do not do it again or you will be disqualified."
+        : `Tab/window switch ${count} detected. The assessment has been disqualified.`;
+    }
+
+    return count === 1
+      ? "Camera interruption was detected. Do not do it again or you will be disqualified."
+      : `Camera warning ${count} detected. The assessment has been disqualified.`;
+  }, []);
+
   const recordCameraEvent = useCallback((message: string) => {
     if (!cameraSecurity.enabled || isFinalizing || autoSubmitStartedRef.current) return;
 
+    let nextCount = cameraEvents + 1;
     setCameraEvents((count) => {
-      const next = count + 1;
-      const reachedLimit = next >= cameraSecurity.maxEvents;
-      window.alert(
-        reachedLimit
-          ? `Camera warning ${next}/${cameraSecurity.maxEvents}: ${message} Your assessment will be submitted now.`
-          : `Camera warning ${next}/${cameraSecurity.maxEvents}: ${message}`,
-      );
-      if (reachedLimit && cameraSecurity.autoSubmitOnMax) {
-        setSecuritySubmitCameraEvents(next);
-      }
-      return next;
+      nextCount = count + 1;
+      return nextCount;
     });
-  }, [cameraSecurity.autoSubmitOnMax, cameraSecurity.enabled, cameraSecurity.maxEvents, isFinalizing]);
+
+    const reachedLimit = nextCount >= cameraSecurity.maxEvents;
+    window.alert(
+      reachedLimit
+        ? `Camera warning ${nextCount}/${cameraSecurity.maxEvents}: ${message}. The assessment has been disqualified.`
+        : `Camera warning ${nextCount}/${cameraSecurity.maxEvents}: ${message}`,
+    );
+    if (reachedLimit && cameraSecurity.autoSubmitOnMax) {
+      void disqualifyAssessment("camera", nextCount, `Camera warning ${nextCount}/${cameraSecurity.maxEvents}: ${message}`);
+    }
+  }, [cameraEvents, cameraSecurity.autoSubmitOnMax, cameraSecurity.enabled, cameraSecurity.maxEvents, disqualifyAssessment, isFinalizing]);
 
   const requestCameraAccess = useCallback(async () => {
     if (!cameraSecurity.enabled) return;
@@ -579,6 +684,128 @@ export function AssessmentShell({
     });
   }
 
+  function recordSubmittedInput(questionId: string, endpoint: string, body: Record<string, unknown>) {
+    setSubmittedInputDebugByQuestion((current) => ({
+      ...current,
+      [questionId]: {
+        submittedAt: new Date().toISOString(),
+        endpoint,
+        method: "POST",
+        body,
+      },
+    }));
+  }
+
+  function buildEvaluationInput(question: AssessmentQuestion, answer: AnswerState, resultSummary: string): Record<string, unknown> {
+    if (question.engine === "sql") {
+      return {
+        question_id: question.id,
+        question_title: question.title || question.id,
+        prompt: question.prompt,
+        topic: question.topic,
+        expected_approach: question.expected_approach,
+        evaluator_context: question.evaluator_context,
+        schema_ref: question.schema_ref,
+        submitted_query: answer.value || "",
+        status: "submitted",
+        run_count: answer.runs,
+        submit_count: answer.submissions + 1,
+        execution_ms: answer.sqlExecutionMs,
+        sql_result_summary: resultSummary,
+      };
+    }
+
+    if (question.engine === "mcq") {
+      const selected = answer.selectedOptions || [];
+      const correct = question.correct_options || [];
+      const isCorrect = sameStringSet(selected, correct);
+      return {
+        student_id: "local-browser-attempt",
+        total_questions: 1,
+        correct_count: isCorrect ? 1 : 0,
+        deterministic_score: isCorrect ? 100 : 0,
+        answers: [
+          {
+            question_id: question.id,
+            question_title: question.title || question.id,
+            topic: question.topic || "general",
+            options: question.options || [],
+            selected_options: selected,
+            correct_options: correct,
+            explanation: question.explanation,
+            misconception_mapping: question.misconception_mapping,
+            is_correct: isCorrect,
+            answer_change_count: 0,
+            time_spent_seconds: 0,
+          },
+        ],
+        tab_events: tabEvents,
+      };
+    }
+
+    return {
+      question_id: question.id,
+      question_title: question.title || question.id,
+      prompt: question.prompt,
+      topic: question.topic,
+      difficulty: question.difficulty,
+      expected_approach: question.expected_approach,
+      evaluator_context: question.evaluator_context,
+      language: answer.language,
+      submitted_code: answer.value || "",
+      status: "submitted",
+      run_count: answer.runs,
+      submit_count: answer.submissions + 1,
+      compiler_result_summary: resultSummary,
+      open_test_cases: question.open_test_cases || [],
+      hidden_test_cases: question.section === "DSA" ? question.hidden_test_cases || [] : [],
+      all_doc_test_cases: question.test_cases || [],
+    };
+  }
+
+  async function evaluateSubmittedAnswer(question: AssessmentQuestion, answer: AnswerState, resultSummary: string) {
+    const section = evaluationEndpointForQuestion(question);
+    const endpoint = `/api/evaluations/${section}`;
+    const input = buildEvaluationInput(question, answer, resultSummary);
+    const requestedAt = new Date().toISOString();
+
+    setAiEvaluationDebugByQuestion((current) => ({
+      ...current,
+      [question.id]: { requestedAt, endpoint, input },
+    }));
+
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      const payload = (await response.json().catch(() => null)) as unknown;
+      if (!response.ok) {
+        const message =
+          payload && typeof payload === "object" && "message" in payload
+            ? String((payload as { message?: unknown }).message)
+            : `AI evaluation failed with status ${response.status}`;
+        throw new Error(message);
+      }
+
+      setAiEvaluationDebugByQuestion((current) => ({
+        ...current,
+        [question.id]: { requestedAt, endpoint, input, output: payload },
+      }));
+    } catch (error) {
+      setAiEvaluationDebugByQuestion((current) => ({
+        ...current,
+        [question.id]: {
+          requestedAt,
+          endpoint,
+          input,
+          error: error instanceof Error ? error.message : "AI evaluation failed.",
+        },
+      }));
+    }
+  }
+
   function changeQuestion(questionId: string) {
     const targetQuestion = questions.find((question) => question.id === questionId);
     if (!targetQuestion) return;
@@ -607,7 +834,7 @@ export function AssessmentShell({
   }
 
   async function executeCode(action: "run" | "submit") {
-    if (isExecuting) return;
+    if (isExecuting || isIntegrityLocked) return;
 
     setIsExecuting(true);
     const visibleFallback = visibleTestResultsForQuestion(activeQuestion);
@@ -620,16 +847,22 @@ export function AssessmentShell({
     scrollToResults();
 
     try {
-      const response = await fetch(`/api/code/${action}`, {
+      const endpoint = `/api/code/${action}`;
+      const requestBody = {
+        attempt_id: "local-browser-attempt",
+        question_id: activeQuestion.id,
+        language: activeAnswer.language,
+        source_code: activeAnswer.value,
+        run_type: action,
+      };
+      if (action === "submit") {
+        recordSubmittedInput(activeQuestion.id, endpoint, requestBody);
+      }
+
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          attempt_id: "local-browser-attempt",
-          question_id: activeQuestion.id,
-          language: activeAnswer.language,
-          source_code: activeAnswer.value,
-          run_type: action,
-        }),
+        body: JSON.stringify(requestBody),
       });
       const payload = (await response.json().catch(() => null)) as CompilerResponse | null;
 
@@ -672,12 +905,16 @@ export function AssessmentShell({
 
         const passed = parsedTestResults.passed;
         const totalTests = parsedTestResults.total;
+        const resultMessage = `Test results: ${passed}/${totalTests} passed (${Math.round((passed / totalTests) * 100)}%)`;
         updateActiveAnswer({
           runs: action === "run" ? activeAnswer.runs + 1 : activeAnswer.runs,
           submissions: action === "submit" ? activeAnswer.submissions + 1 : activeAnswer.submissions,
           status: action === "submit" ? "submitted" : "ran",
-          resultMessage: `Test results: ${passed}/${totalTests} passed (${Math.round((passed / totalTests) * 100)}%)`,
+          resultMessage,
         });
+        if (action === "submit") {
+          void evaluateSubmittedAnswer(activeQuestion, activeAnswer, resultMessage);
+        }
       } else {
         if (visibleFallback) {
           setTestResults(visibleFallback);
@@ -691,27 +928,35 @@ export function AssessmentShell({
           stderr ? `Stderr:\n${stderr}` : null,
         ].filter(Boolean);
 
+        const resultMessage = resultLines.join("\n\n") || "Compiler completed with no output.";
         updateActiveAnswer({
           runs: action === "run" ? activeAnswer.runs + 1 : activeAnswer.runs,
           submissions: action === "submit" ? activeAnswer.submissions + 1 : activeAnswer.submissions,
           status: action === "submit" ? "submitted" : "ran",
-          resultMessage: resultLines.join("\n\n") || "Compiler completed with no output.",
+          resultMessage,
         });
+        if (action === "submit") {
+          void evaluateSubmittedAnswer(activeQuestion, activeAnswer, resultMessage);
+        }
       }
     } catch (error) {
+      const resultMessage = error instanceof Error ? error.message : "Compiler request failed.";
       updateActiveAnswer({
         runs: action === "run" ? activeAnswer.runs + 1 : activeAnswer.runs,
         submissions: action === "submit" ? activeAnswer.submissions + 1 : activeAnswer.submissions,
         status: action === "submit" ? "submitted" : "ran",
-        resultMessage: error instanceof Error ? error.message : "Compiler request failed.",
+        resultMessage,
       });
+      if (action === "submit") {
+        void evaluateSubmittedAnswer(activeQuestion, activeAnswer, resultMessage);
+      }
     } finally {
       setIsExecuting(false);
     }
   }
 
   async function executeSql(action: "run" | "submit") {
-    if (isExecuting) return;
+    if (isExecuting || isIntegrityLocked) return;
 
     setIsExecuting(true);
     updateActiveAnswer({
@@ -722,15 +967,21 @@ export function AssessmentShell({
     scrollToResults();
 
     try {
-      const response = await fetch(`/api/sql/${action}`, {
+      const endpoint = `/api/sql/${action}`;
+      const requestBody = {
+        attempt_id: "local-browser-attempt",
+        question_id: activeQuestion.id,
+        query: activeAnswer.value,
+        mode: action === "submit" ? "hidden" : "visible",
+      };
+      if (action === "submit") {
+        recordSubmittedInput(activeQuestion.id, endpoint, requestBody);
+      }
+
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          attempt_id: "local-browser-attempt",
-          question_id: activeQuestion.id,
-          query: activeAnswer.value,
-          mode: action === "submit" ? "hidden" : "visible",
-        }),
+        body: JSON.stringify(requestBody),
       });
       const payload = (await response.json().catch(() => null)) as SqlRunResponse | null;
 
@@ -739,32 +990,46 @@ export function AssessmentShell({
       }
 
       setSqlResult(payload);
+      const resultMessage = payload?.error
+        ? `SQL error:\n${payload.error}`
+        : `SQL completed. Rows: ${payload?.row_count ?? 0}. Execution: ${payload?.execution_ms ?? 0} ms.`;
+      const answerForEvaluation = {
+        ...activeAnswer,
+        sqlExecutionMs: typeof payload?.execution_ms === "number" ? payload.execution_ms : activeAnswer.sqlExecutionMs,
+      };
       updateActiveAnswer({
         runs: action === "run" ? activeAnswer.runs + 1 : activeAnswer.runs,
         submissions: action === "submit" ? activeAnswer.submissions + 1 : activeAnswer.submissions,
         status: action === "submit" ? "submitted" : "ran",
         sqlExecutionMs: typeof payload?.execution_ms === "number" ? payload.execution_ms : null,
-        resultMessage: payload?.error
-          ? `SQL error:\n${payload.error}`
-          : `SQL completed. Rows: ${payload?.row_count ?? 0}. Execution: ${payload?.execution_ms ?? 0} ms.`,
+        resultMessage,
       });
+      if (action === "submit") {
+        void evaluateSubmittedAnswer(activeQuestion, answerForEvaluation, resultMessage);
+      }
     } catch (error) {
       setSqlResult(null);
+      const resultMessage = error instanceof Error ? error.message : "SQL request failed.";
       updateActiveAnswer({
         runs: action === "run" ? activeAnswer.runs + 1 : activeAnswer.runs,
         submissions: action === "submit" ? activeAnswer.submissions + 1 : activeAnswer.submissions,
         status: action === "submit" ? "submitted" : "ran",
-        resultMessage: error instanceof Error ? error.message : "SQL request failed.",
+        resultMessage,
       });
+      if (action === "submit") {
+        void evaluateSubmittedAnswer(activeQuestion, activeAnswer, resultMessage);
+      }
     } finally {
       setIsExecuting(false);
     }
   }
 
   function runQuestion() {
-    if (isExecuting) {
+    if (isExecuting || isIntegrityLocked) {
       updateActiveAnswer({
-        resultMessage: "A compiler request is already running.",
+        resultMessage: isIntegrityLocked
+          ? "This assessment has been disqualified because a cheating signal was detected."
+          : "A compiler request is already running.",
       });
       setActiveTab("results");
       scrollToResults();
@@ -791,9 +1056,11 @@ export function AssessmentShell({
   }
 
   function submitQuestion() {
-    if (isExecuting) {
+    if (isExecuting || isIntegrityLocked) {
       updateActiveAnswer({
-        resultMessage: "A compiler request is already running.",
+        resultMessage: isIntegrityLocked
+          ? "This assessment has been disqualified because a cheating signal was detected."
+          : "A compiler request is already running.",
       });
       setActiveTab("results");
       scrollToResults();
@@ -810,11 +1077,19 @@ export function AssessmentShell({
       return;
     }
 
+    recordSubmittedInput(activeQuestion.id, "local-mcq-submit", {
+      attempt_id: "local-browser-attempt",
+      question_id: activeQuestion.id,
+      selected_options: activeAnswer.selectedOptions,
+      run_type: "submit",
+    });
+    const resultMessage = "Question submitted. Hidden results remain private until final evaluation.";
     updateActiveAnswer({
       submissions: activeAnswer.submissions + 1,
       status: "submitted",
-      resultMessage: "Question submitted. Hidden results remain private until final evaluation.",
+      resultMessage,
     });
+    void evaluateSubmittedAnswer(activeQuestion, activeAnswer, resultMessage);
     setActiveTab("results");
     scrollToResults();
   }
@@ -839,11 +1114,13 @@ export function AssessmentShell({
     submissionMode: "manual" | "auto" = "manual",
     tabEventsOverride?: number,
     cameraEventsOverride?: number,
+    integrityViolationOverride?: IntegrityViolation,
   ) => {
     if (isExecuting || isFinalizing) return;
 
     saveNow();
     setIsFinalizing(true);
+    const integrityPayload = integrityViolationOverride || integrityViolation;
 
     try {
       const submissionBody = {
@@ -854,6 +1131,10 @@ export function AssessmentShell({
         tab_events: tabEventsOverride ?? tabEvents,
         camera_events: cameraEventsOverride ?? cameraEvents,
         submission_mode: submissionMode,
+        integrity_status: integrityPayload ? "disqualified" : null,
+        integrity_source: integrityPayload?.source || null,
+        integrity_message: integrityPayload?.message || null,
+        integrity_event_count: integrityPayload?.eventCount || null,
         answers,
       };
       const response = await fetch("/api/assessment/finalize", {
@@ -861,9 +1142,13 @@ export function AssessmentShell({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(submissionBody),
       });
-      const payload = (await response.json().catch(() => null)) as { attempt_id?: string; message?: string } | null;
+      const payload = (await response.json().catch(() => null)) as { attempt_id?: string; message?: string; statusCode?: number } | null;
 
       if (!response.ok) {
+        // 409 Conflict means the attempt already exists in the database - redirect to report
+        if (response.status === 409) {
+          throw new Error("already completed or disqualified");
+        }
         throw new Error(payload?.message || `Final submission failed with status ${response.status}`);
       }
 
@@ -878,8 +1163,22 @@ export function AssessmentShell({
       router.replace(reportPath);
       router.refresh();
     } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      
+      // If integrity was violated or the backend confirms completion/disqualification,
+      // force redirect to report and clear local state
+      // 409 Conflict or integrity violation: attempt already exists in DB or was disqualified
+      if (integrityPayload || message.toLowerCase().includes("already completed or disqualified") || message.toLowerCase().includes("conflict")) {
+        localStorage.removeItem(storageKey);
+        localStorage.removeItem(`${storageKey}:startedAt`);
+        router.replace("/assessment/report?mode=auto");
+        router.refresh();
+        return;
+      }
+      
+      // For non-integrity errors, show the error on the results panel
       updateActiveAnswer({
-        resultMessage: error instanceof Error ? error.message : "Final assessment submission failed.",
+        resultMessage: message || "Final assessment submission failed.",
       });
       setActiveTab("results");
     } finally {
@@ -893,6 +1192,7 @@ export function AssessmentShell({
     cameraEvents,
     isExecuting,
     isFinalizing,
+    integrityViolation,
     router,
     saveNow,
     storageKey,
@@ -901,25 +1201,23 @@ export function AssessmentShell({
   ]);
 
   useEffect(() => {
+    if (!integrityViolation || isExecuting || isFinalizing || autoSubmitStartedRef.current) return;
+
+    autoSubmitStartedRef.current = true;
+    void submitAssessment(
+      "auto",
+      integrityViolation.source === "tab_switch" ? integrityViolation.eventCount : undefined,
+      integrityViolation.source === "camera" ? integrityViolation.eventCount : undefined,
+      integrityViolation,
+    );
+  }, [integrityViolation, isExecuting, isFinalizing, submitAssessment]);
+
+  useEffect(() => {
     if (!hasHydrated || !canRunAssessment || remainingSeconds > 0 || isExecuting || isFinalizing || autoSubmitStartedRef.current) return;
 
     autoSubmitStartedRef.current = true;
     void submitAssessment("auto");
   }, [canRunAssessment, hasHydrated, isExecuting, isFinalizing, remainingSeconds, submitAssessment]);
-
-  useEffect(() => {
-    if (securitySubmitTabEvents === null || isExecuting || isFinalizing || autoSubmitStartedRef.current) return;
-
-    autoSubmitStartedRef.current = true;
-    void submitAssessment("auto", securitySubmitTabEvents);
-  }, [isExecuting, isFinalizing, securitySubmitTabEvents, submitAssessment]);
-
-  useEffect(() => {
-    if (securitySubmitCameraEvents === null || isExecuting || isFinalizing || autoSubmitStartedRef.current) return;
-
-    autoSubmitStartedRef.current = true;
-    void submitAssessment("auto", undefined, securitySubmitCameraEvents);
-  }, [isExecuting, isFinalizing, securitySubmitCameraEvents, submitAssessment]);
 
   useEffect(() => {
     if (!cameraVideoRef.current || !cameraStream) return;
@@ -959,6 +1257,8 @@ export function AssessmentShell({
       if (isFinalizing || autoSubmitStartedRef.current) return;
 
       if (document.hidden) {
+        if (pendingTabWarningRef.current !== null) return;
+
         setTabEvents((count) => {
           const next = count + 1;
           pendingTabWarningRef.current = next;
@@ -974,12 +1274,16 @@ export function AssessmentShell({
       const reachedLimit = violationCount >= tabSecurity.maxEvents;
       window.alert(
         reachedLimit
-          ? `Warning ${violationCount}/${tabSecurity.maxEvents}: You have reached the maximum tab/window change limit. Your assessment will be submitted now.`
-          : `Warning ${violationCount}/${tabSecurity.maxEvents}: Do not change window or open another tab during the assessment.`,
+          ? `Warning ${violationCount}/${tabSecurity.maxEvents}: Switching tabs or windows has disqualified this attempt.`
+          : `Warning ${violationCount}/${tabSecurity.maxEvents}: Switching tabs or windows was detected. Do not do it again or you will be disqualified.`,
       );
 
       if (reachedLimit && tabSecurity.autoSubmitOnMax) {
-        setSecuritySubmitTabEvents(violationCount);
+        disqualifyAssessment(
+          "tab_switch",
+          violationCount,
+          buildIntegrityMessage("tab_switch", violationCount),
+        );
       }
     }
 
@@ -989,7 +1293,7 @@ export function AssessmentShell({
       document.removeEventListener("visibilitychange", onVisibilityChange);
       window.removeEventListener("focus", onVisibilityChange);
     };
-  }, [canRunAssessment, hasHydrated, isFinalizing, submitAssessment, tabSecurity.autoSubmitOnMax, tabSecurity.enabled, tabSecurity.maxEvents]);
+  }, [buildIntegrityMessage, canRunAssessment, disqualifyAssessment, hasHydrated, isFinalizing, tabSecurity.autoSubmitOnMax, tabSecurity.enabled, tabSecurity.maxEvents]);
 
   if (cameraSecurity.enabled && !cameraStream) {
     return (
@@ -1056,6 +1360,25 @@ export function AssessmentShell({
           </div>
         </div>
       ) : null}
+      {integrityViolation ? (
+        <div className="fixed inset-0 z-[60] grid place-items-center bg-slate-950/85 px-4 text-white">
+          <section className="w-full max-w-xl rounded-[12px] border border-red-300 bg-slate-950 p-6 shadow-2xl">
+            <div className="inline-flex h-12 w-12 items-center justify-center rounded-[10px] bg-red-500/15 text-red-300">
+              <ShieldAlert size={22} />
+            </div>
+            <h2 className="mt-4 text-2xl font-semibold text-white">Assessment disqualified</h2>
+            <p className="mt-3 text-sm leading-6 text-slate-200">
+              {integrityViolation.message}
+            </p>
+            <p className="mt-3 text-sm leading-6 text-slate-300">
+              The session has been stopped. Switching tabs or losing camera access during the assessment disqualifies the attempt.
+            </p>
+            <p className="mt-4 rounded-[10px] border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-100">
+              Screen and camera activity are monitored during the assessment. Switching tabs or camera interruptions will stop the session and mark the attempt as disqualified.
+            </p>
+          </section>
+        </div>
+      ) : null}
       <header className="sticky top-0 z-30 border-b border-slate-200/80 bg-white/95 shadow-sm backdrop-blur">
         <div className="flex min-h-16 items-center justify-between gap-3 px-3 sm:px-5">
           <div className="flex items-center gap-3">
@@ -1084,7 +1407,8 @@ export function AssessmentShell({
             <button
               type="button"
               onClick={saveNow}
-              className="hidden h-10 items-center gap-2 rounded-[8px] border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 sm:inline-flex"
+              disabled={isIntegrityLocked}
+              className="hidden h-10 items-center gap-2 rounded-[8px] border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-40 sm:inline-flex"
             >
               <Save size={16} />
               Save
@@ -1092,7 +1416,7 @@ export function AssessmentShell({
             <button
               type="button"
               onClick={() => void submitAssessment("manual")}
-              disabled={isExecuting || isFinalizing}
+              disabled={isExecuting || isFinalizing || isIntegrityLocked}
               className="inline-flex h-10 items-center gap-2 rounded-[8px] bg-emerald-700 px-3 text-sm font-semibold text-white shadow-sm shadow-emerald-900/10 hover:bg-emerald-800 disabled:opacity-40"
             >
               <Send size={16} />
@@ -1152,7 +1476,7 @@ export function AssessmentShell({
               submitted={submitted}
               activeSection={activeSection}
               sectionStatuses={sectionStatuses}
-              disabled={isExecuting}
+              disabled={isExecuting || isIntegrityLocked}
               pinned={isQuestionPanelPinned}
               onTogglePinned={() => setIsQuestionPanelPinned((value) => !value)}
               onSelect={changeQuestion}
@@ -1178,11 +1502,12 @@ export function AssessmentShell({
                       key={section}
                       type="button"
                       onClick={() => setIsQuestionPanelPinned(true)}
+                      disabled={isIntegrityLocked}
                       className={`relative inline-flex h-10 w-10 items-center justify-center rounded-[10px] border ${
                         status === "active"
                           ? "border-emerald-300 bg-emerald-50 text-emerald-800"
                           : "border-slate-200 bg-white text-slate-500"
-                      }`}
+                      } disabled:opacity-40`}
                       title={`${section} ${status}`}
                     >
                       <Icon size={17} />
@@ -1225,7 +1550,7 @@ export function AssessmentShell({
                 submitted={submitted}
                 activeSection={activeSection}
                 sectionStatuses={sectionStatuses}
-                disabled={isExecuting}
+                disabled={isExecuting || isIntegrityLocked}
                 pinned
                 onSelect={changeQuestion}
               />
@@ -1260,7 +1585,7 @@ export function AssessmentShell({
                 ) : null}
                 <span className="rounded-[8px] border border-slate-200 px-2 py-1">Runs {activeAnswer.runs}</span>
                 <span className="rounded-[8px] border border-slate-200 px-2 py-1">Submits {activeAnswer.submissions}</span>
-                <span className="rounded-[8px] border border-slate-200 px-2 py-1">Tab events {tabEvents}</span>
+                {/* <span className="rounded-[8px] border border-slate-200 px-2 py-1">Tab events {tabEvents}</span> */}
               </div>
             </div>
 
@@ -1318,6 +1643,33 @@ export function AssessmentShell({
                   }
                 />
               ) : null}
+              {activeSubmittedInputDebug ? (
+                <div className="rounded-[10px] border border-amber-700/50 bg-amber-950/30 p-3 text-sm leading-6 text-amber-50">
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-amber-200">
+                    <span>Temporary Submitted Input</span>
+                    <span>{activeSubmittedInputDebug.submittedAt}</span>
+                  </div>
+                  <pre className="max-h-80 overflow-auto whitespace-pre-wrap font-mono text-xs leading-6 text-amber-50">
+                    {JSON.stringify(activeSubmittedInputDebug, null, 2)}
+                  </pre>
+                </div>
+              ) : null}
+              {activeAiEvaluationDebug ? (
+                <div className="rounded-[10px] border border-sky-700/50 bg-sky-950/30 p-3 text-sm leading-6 text-sky-50">
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-sky-200">
+                    <span>AI Evaluation Output</span>
+                    <span>{activeAiEvaluationDebug.requestedAt}</span>
+                  </div>
+                  {activeAiEvaluationDebug.error ? (
+                    <p className="mb-3 rounded-[8px] border border-red-500/40 bg-red-950/40 px-3 py-2 text-xs text-red-100">
+                      {activeAiEvaluationDebug.error}
+                    </p>
+                  ) : null}
+                  <pre className="max-h-96 overflow-auto whitespace-pre-wrap font-mono text-xs leading-6 text-sky-50">
+                    {JSON.stringify(activeAiEvaluationDebug.output ?? { status: "AI evaluation is running..." }, null, 2)}
+                  </pre>
+                </div>
+              ) : null}
             </div>
           </div>
 
@@ -1357,7 +1709,7 @@ export function AssessmentShell({
                 <button
                   type="button"
                   onClick={runQuestion}
-                  disabled={isExecuting}
+                  disabled={isExecuting || isIntegrityLocked}
                   className="inline-flex h-10 items-center gap-2 rounded-[8px] border border-slate-300 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
                 >
                   <Play size={16} />
@@ -1366,7 +1718,7 @@ export function AssessmentShell({
                 <button
                   type="button"
                   onClick={submitQuestion}
-                  disabled={isExecuting || isTimedOut || isSectionTimedOut}
+                  disabled={isExecuting || isTimedOut || isSectionTimedOut || isIntegrityLocked}
                   className="inline-flex h-10 items-center gap-2 rounded-[10px] bg-emerald-700 px-3 text-sm font-semibold text-white shadow-sm shadow-emerald-900/10 hover:bg-emerald-800 disabled:opacity-40"
                 >
                   <CheckCircle2 size={16} />
@@ -1500,8 +1852,15 @@ function QuestionPrompt({ question, visible }: { question: AssessmentQuestion; v
         </span>
       </div>
 
+      {question.title ? (
+        <div className="mb-3 rounded-[12px] border border-slate-200 bg-white px-4 py-3">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Question</p>
+          <h2 className="mt-1 text-sm font-semibold leading-6 text-slate-950 break-words">{question.title}</h2>
+        </div>
+      ) : null}
+
       <div className="rounded-[12px] bg-slate-50 p-4">
-        <p className="whitespace-pre-line text-sm leading-7 text-slate-700">{question.prompt}</p>
+        <p className="whitespace-pre-wrap break-words text-[13px] leading-6 text-slate-700">{question.prompt}</p>
       </div>
 
       {question.function_signature ? (
@@ -1596,10 +1955,10 @@ function QuestionPrompt({ question, visible }: { question: AssessmentQuestion; v
 function SampleInputData({ question }: { question: AssessmentQuestion }) {
   if (question.sample_data_tables?.length) {
     return (
-      <div className="mt-4 rounded-[12px] border border-slate-200 bg-white shadow-sm">
-        <div className="border-b border-slate-100 px-3 py-2">
-          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Sample Input Data</p>
-        </div>
+      <details className="mt-4 rounded-[12px] border border-slate-200 bg-white shadow-sm">
+        <summary className="cursor-pointer list-none border-b border-slate-100 px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+          Sample Input Data
+        </summary>
         <div className="grid gap-4 p-3">
           {question.sample_data_tables.map((table) => (
             <div key={table.name} className="overflow-hidden rounded-[10px] border border-slate-200">
@@ -1634,21 +1993,21 @@ function SampleInputData({ question }: { question: AssessmentQuestion }) {
             </div>
           ))}
         </div>
-      </div>
+      </details>
     );
   }
 
   if (!question.sample_data_sql) return null;
 
   return (
-    <div className="mt-4 overflow-hidden rounded-[12px] border border-slate-200 bg-slate-950 shadow-sm">
-      <div className="border-b border-slate-800 px-3 py-2">
-        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-300">Sample Input Data</p>
-      </div>
+    <details className="mt-4 overflow-hidden rounded-[12px] border border-slate-200 bg-slate-950 shadow-sm">
+      <summary className="cursor-pointer list-none border-b border-slate-800 px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-slate-300">
+        Sample Input Data
+      </summary>
       <pre className="max-h-80 overflow-auto p-3 font-mono text-xs leading-6 text-slate-100">
         {question.sample_data_sql}
       </pre>
-    </div>
+    </details>
   );
 }
 
