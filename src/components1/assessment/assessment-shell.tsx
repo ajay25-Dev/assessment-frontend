@@ -137,13 +137,13 @@ function createInitialAnswers(questions: AssessmentQuestion[]) {
   return Object.fromEntries(questions.map((question) => [question.id, initialAnswer(question)]));
 }
 
-function storageKeyForBank(assessmentBank: AssessmentBank, assessmentInstanceId?: string) {
-  return `joraiq-assessment:${assessmentInstanceId || assessmentBank.assessment.id}`;
+function storageKeyForBank(assessmentBank: AssessmentBank, assessmentInstanceId?: string, studentId?: string) {
+  return `joraiq-assessment:${studentId || "anonymous"}:${assessmentInstanceId || assessmentBank.assessment.id}`;
 }
 
-function loadInitialSnapshot(assessmentBank: AssessmentBank, assessmentInstanceId?: string) {
+function loadInitialSnapshot(assessmentBank: AssessmentBank, assessmentInstanceId?: string, studentId?: string) {
   const questions = assessmentBank.questions;
-  const storageKey = storageKeyForBank(assessmentBank, assessmentInstanceId);
+  const storageKey = storageKeyForBank(assessmentBank, assessmentInstanceId, studentId);
   const fallback = {
     activeQuestionId: questions[0]?.id || "",
     answers: createInitialAnswers(questions),
@@ -186,14 +186,16 @@ function loadInitialSnapshot(assessmentBank: AssessmentBank, assessmentInstanceI
 export function AssessmentShell({
   assessmentBank,
   assessmentInstanceId,
+  studentId,
 }: {
   assessmentBank: AssessmentBank;
   assessmentInstanceId?: string;
+  studentId?: string;
 }) {
   const router = useRouter();
   const questions = assessmentBank.questions;
-  const storageKey = storageKeyForBank(assessmentBank, assessmentInstanceId);
-  const [initialSnapshot] = useState(() => loadInitialSnapshot(assessmentBank, assessmentInstanceId));
+  const storageKey = storageKeyForBank(assessmentBank, assessmentInstanceId, studentId);
+  const [initialSnapshot] = useState(() => loadInitialSnapshot(assessmentBank, assessmentInstanceId, studentId));
   const [activeQuestionId, setActiveQuestionId] = useState(initialSnapshot.activeQuestionId);
   const [answers, setAnswers] = useState<Record<string, AnswerState>>(initialSnapshot.answers);
   const [remainingSeconds, setRemainingSeconds] = useState(initialSnapshot.remainingSeconds);
@@ -649,7 +651,7 @@ export function AssessmentShell({
                 <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200">
                   <div className="h-full rounded-full bg-emerald-700" style={{ width: `${(done / sectionQuestions.length) * 100}%` }} />
                 </div>
-                <p className="mt-1 text-slate-500">{meta?.duration_minutes} min budget</p>
+                <p className="mt-1 text-slate-500">{meta?.duration_minutes} min</p>
               </div>
             );
           })}
@@ -1017,22 +1019,22 @@ function SampleInputData({ question }: { question: AssessmentQuestion }) {
                 <h3 className="font-mono text-sm font-semibold text-slate-900">{table.name}</h3>
                 <span className="text-xs text-slate-500">{table.rows.length} rows</span>
               </div>
-              <div className="overflow-auto">
-                <table className="min-w-full border-collapse text-left text-xs">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs border-collapse">
                   <thead className="bg-slate-100 text-slate-600">
                     <tr>
-                      {(table.columns.length ? table.columns : table.rows[0]?.map((_, index) => `column_${index + 1}`) || []).map((column) => (
-                        <th key={column} className="whitespace-nowrap border-b border-slate-200 px-3 py-2 font-mono font-semibold">
+                      {(table.columns.length ? table.columns : table.rows[0]?.map((_, index) => `column_${index + 1}`) || []).map((column, ci, arr) => (
+                        <th key={column} className={`whitespace-nowrap border-b border-slate-200 px-3 py-2 font-mono font-semibold min-w-[100px] ${ci < arr.length - 1 ? 'border-r border-slate-200' : ''}`}>
                           {column}
                         </th>
                       ))}
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-100 bg-white">
+                  <tbody className="bg-white">
                     {table.rows.map((row, rowIndex) => (
                       <tr key={`${table.name}-${rowIndex}`} className="hover:bg-slate-50">
-                        {row.map((value, valueIndex) => (
-                          <td key={`${table.name}-${rowIndex}-${valueIndex}`} className="max-w-64 whitespace-nowrap px-3 py-2 font-mono text-slate-700">
+                        {row.map((value, valueIndex, valArr) => (
+                          <td key={`${table.name}-${rowIndex}-${valueIndex}`} className={`border-b border-slate-100 px-3 py-2 font-mono text-slate-700 break-all ${valueIndex < valArr.length - 1 ? 'border-r border-slate-100' : ''}`}>
                             {value}
                           </td>
                         ))}

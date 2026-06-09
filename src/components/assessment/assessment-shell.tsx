@@ -308,6 +308,13 @@ function loadSavedSnapshot(assessmentBank: AssessmentBank, assessmentInstanceId?
   const fallback = loadInitialSnapshot(assessmentBank);
   if (typeof window === "undefined") return fallback;
 
+  // Guard: never load an anonymous-scoped key if a real studentId is known
+  if (studentId && storageKey.includes(":anonymous:")) {
+    window.localStorage.removeItem(storageKey);
+    window.localStorage.removeItem(`${storageKey}:startedAt`);
+    return fallback;
+  }
+
   const saved = window.localStorage.getItem(storageKey);
   if (!saved) {
     return fallback;
@@ -1455,7 +1462,7 @@ export function AssessmentShell({
                   <div className="h-full rounded-full bg-emerald-700" style={{ width: `${(done / sectionQuestions.length) * 100}%` }} />
                 </div>
                 <p className="mt-1 text-slate-500">
-                  {sectionDuration} min budget
+                  {sectionDuration} min
                   {status === "active" ? ` - ${formatTime(sectionRemainingSeconds)} left` : ""}
                 </p>
               </div>
@@ -1966,22 +1973,22 @@ function SampleInputData({ question }: { question: AssessmentQuestion }) {
                 <h3 className="font-mono text-sm font-semibold text-slate-900">{table.name}</h3>
                 <span className="text-xs text-slate-500">{table.rows.length} rows</span>
               </div>
-              <div className="overflow-auto">
-                <table className="min-w-full border-collapse text-left text-xs">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs border-collapse">
                   <thead className="bg-slate-100 text-slate-600">
                     <tr>
-                      {(table.columns.length ? table.columns : table.rows[0]?.map((_, index) => `column_${index + 1}`) || []).map((column) => (
-                        <th key={column} className="whitespace-nowrap border-b border-slate-200 px-3 py-2 font-mono font-semibold">
+                      {(table.columns.length ? table.columns : table.rows[0]?.map((_, index) => `column_${index + 1}`) || []).map((column, ci, arr) => (
+                        <th key={column} className={`whitespace-nowrap border-b border-slate-200 px-3 py-2 font-mono font-semibold min-w-[100px] ${ci < arr.length - 1 ? 'border-r border-slate-200' : ''}`}>
                           {column}
                         </th>
                       ))}
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-100 bg-white">
+                  <tbody className="bg-white">
                     {table.rows.map((row, rowIndex) => (
                       <tr key={`${table.name}-${rowIndex}`} className="hover:bg-slate-50">
-                        {row.map((value, valueIndex) => (
-                          <td key={`${table.name}-${rowIndex}-${valueIndex}`} className="max-w-64 whitespace-nowrap px-3 py-2 font-mono text-slate-700">
+                        {row.map((value, valueIndex, valArr) => (
+                          <td key={`${table.name}-${rowIndex}-${valueIndex}`} className={`border-b border-slate-100 px-3 py-2 font-mono text-slate-700 break-all ${valueIndex < valArr.length - 1 ? 'border-r border-slate-100' : ''}`}>
                             {value}
                           </td>
                         ))}
