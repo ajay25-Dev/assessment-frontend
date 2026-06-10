@@ -1188,7 +1188,7 @@ function AnswerPanel({
 
   const languageOptions =
     question.engine === "sql"
-      ? [{ id: "sql", label: "PostgreSQL" }]
+      ? [{ id: "sql", label: "PostgreSQL 15" }]
       : (assessmentBank?.languages || []).filter((language) => question.allowed_languages?.includes(language.id));
 
   return (

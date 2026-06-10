@@ -40,7 +40,7 @@ const sections = [
 ];
 
 const dsaRules = [
-  "All 5 DSA questions are mandatory.",
+  "All 4 DSA questions are mandatory.",
   "Each DSA question has 5 open and 10 hidden test cases.",
   "Strict execution time and memory limits apply.",
   "Run and submission activity is tracked.",
@@ -109,11 +109,13 @@ export default async function AssessmentStartPage({ searchParams }: PageProps) {
       return assessmentId ? row.client_metadata?.source_assessment_id === assessmentId : true;
     }) || null;
 
-  const existingAttemptId = terminalAttempt?.id || null;
-  const isDisqualified =
-    terminalAttempt?.status === "disqualified" ||
-    terminalAttempt?.client_metadata?.integrity_status === "disqualified";
-  const hasCompletedAssessment = Boolean(existingAttemptId);
+  const isLocalhost = process.env.NODE_ENV !== "production";
+  const existingAttemptId = isLocalhost ? null : terminalAttempt?.id || null;
+  const isDisqualified = isLocalhost
+    ? false
+    : terminalAttempt?.status === "disqualified" ||
+      terminalAttempt?.client_metadata?.integrity_status === "disqualified";
+  const hasCompletedAssessment = isLocalhost ? false : Boolean(existingAttemptId);
   const primaryCtaHref = assessmentId
     ? `/assessment/test?assessmentId=${assessmentId}`
     : "/assessment/test";
@@ -219,7 +221,7 @@ export default async function AssessmentStartPage({ searchParams }: PageProps) {
             </div>
             <div className="mt-5 grid gap-3 sm:grid-cols-3">
               {[
-                ["5 Mandatory Problems", "Graphs, shortest paths, hashing, versioning, sliding window"],
+                ["4 Mandatory Problems", "Graphs, shortest paths, hashing, versioning, sliding window"],
                 ["Open + Hidden Tests", "Visible confidence plus unseen robustness"],
                 ["Compiler Tracking", "Runs, submissions, timing, and output quality"],
               ].map(([title, purpose]) => (

@@ -369,6 +369,7 @@ export function AssessmentShell({
   // This catches cases where the server-side check was bypassed (e.g. no assessmentId in URL)
   useEffect(() => {
     if (!assessmentInstanceId) return;
+    if (typeof window !== "undefined" && window.location.hostname === "localhost") return;
     
     let cancelled = false;
     fetch("/api/assessment/check-attempt", {
@@ -463,7 +464,7 @@ export function AssessmentShell({
     const envMaxEvents = publicEnvNumber(process.env.NEXT_PUBLIC_ASSESSMENT_CAMERA_MAX_EVENTS);
     return {
       enabled: envEnabled ?? configured?.camera_proctoring_enabled ?? false,
-      maxEvents: envMaxEvents ?? configured?.max_camera_events ?? 2,
+      maxEvents: envMaxEvents ?? configured?.max_camera_events ?? 1,
       autoSubmitOnMax: configured?.auto_submit_on_camera_events ?? true,
     };
   }, [assessmentBank.assessment.security]);
@@ -590,6 +591,7 @@ export function AssessmentShell({
     message: string,
   ) => {
     if (isFinalizing || autoSubmitStartedRef.current || isIntegrityLocked) return;
+    if (typeof window !== "undefined" && window.location.hostname === "localhost") return;
 
     cameraStream?.getTracks().forEach((track) => track.stop());
     setIntegrityViolation({ source, eventCount, message });
@@ -618,11 +620,13 @@ export function AssessmentShell({
     });
 
     const reachedLimit = nextCount >= cameraSecurity.maxEvents;
-    window.alert(
-      reachedLimit
-        ? `Camera warning ${nextCount}/${cameraSecurity.maxEvents}: ${message}. The assessment has been disqualified.`
-        : `Camera warning ${nextCount}/${cameraSecurity.maxEvents}: ${message}`,
-    );
+    if (typeof window === "undefined" || window.location.hostname !== "localhost") {
+      window.alert(
+        reachedLimit
+          ? `Camera warning ${nextCount}/${cameraSecurity.maxEvents}: ${message}. The assessment has been disqualified.`
+          : `Camera warning ${nextCount}/${cameraSecurity.maxEvents}: ${message}`,
+      );
+    }
     if (reachedLimit && cameraSecurity.autoSubmitOnMax) {
       void disqualifyAssessment("camera", nextCount, `Camera warning ${nextCount}/${cameraSecurity.maxEvents}: ${message}`);
     }
@@ -1164,11 +1168,13 @@ export function AssessmentShell({
       }
       localStorage.removeItem(storageKey);
       localStorage.removeItem(`${storageKey}:startedAt`);
-      const reportPath = payload?.attempt_id
-        ? `/assessment/report?attemptId=${encodeURIComponent(payload.attempt_id)}&mode=${submissionMode}`
-        : `/assessment/report?mode=${submissionMode}`;
-      router.replace(reportPath);
-      router.refresh();
+      if (typeof window === "undefined" || window.location.hostname !== "localhost") {
+        const reportPath = payload?.attempt_id
+          ? `/assessment/report?attemptId=${encodeURIComponent(payload.attempt_id)}&mode=${submissionMode}`
+          : `/assessment/report?mode=${submissionMode}`;
+        router.replace(reportPath);
+        router.refresh();
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
       
@@ -1178,8 +1184,10 @@ export function AssessmentShell({
       if (integrityPayload || message.toLowerCase().includes("already completed or disqualified") || message.toLowerCase().includes("conflict")) {
         localStorage.removeItem(storageKey);
         localStorage.removeItem(`${storageKey}:startedAt`);
-        router.replace("/assessment/report?mode=auto");
-        router.refresh();
+        if (typeof window === "undefined" || window.location.hostname !== "localhost") {
+          router.replace("/assessment/report?mode=auto");
+          router.refresh();
+        }
         return;
       }
       
@@ -1279,11 +1287,13 @@ export function AssessmentShell({
 
       pendingTabWarningRef.current = null;
       const reachedLimit = violationCount >= tabSecurity.maxEvents;
-      window.alert(
-        reachedLimit
-          ? `Warning ${violationCount}/${tabSecurity.maxEvents}: Switching tabs or windows has disqualified this attempt.`
-          : `Warning ${violationCount}/${tabSecurity.maxEvents}: Switching tabs or windows was detected. Do not do it again or you will be disqualified.`,
-      );
+      if (typeof window === "undefined" || window.location.hostname !== "localhost") {
+        window.alert(
+          reachedLimit
+            ? `Warning ${violationCount}/${tabSecurity.maxEvents}: Switching tabs or windows has disqualified this attempt.`
+            : `Warning ${violationCount}/${tabSecurity.maxEvents}: Switching tabs or windows was detected. Do not do it again or you will be disqualified.`,
+        );
+      }
 
       if (reachedLimit && tabSecurity.autoSubmitOnMax) {
         disqualifyAssessment(
@@ -1367,7 +1377,7 @@ export function AssessmentShell({
           </div>
         </div>
       ) : null}
-      {integrityViolation ? (
+      {integrityViolation && typeof window !== "undefined" && window.location.hostname !== "localhost" ? (
         <div className="fixed inset-0 z-[60] grid place-items-center bg-slate-950/85 px-4 text-white">
           <section className="w-full max-w-xl rounded-[12px] border border-red-300 bg-slate-950 p-6 shadow-2xl">
             <div className="inline-flex h-12 w-12 items-center justify-center rounded-[10px] bg-red-500/15 text-red-300">
@@ -1407,7 +1417,7 @@ export function AssessmentShell({
             <div className="hidden rounded-[8px] border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 md:block">
               Saved {lastSavedAt ? lastSavedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "pending"}
             </div>
-            <TimerBadge seconds={sectionRemainingSeconds} hydrated={hasHydrated} label={`${activeSection} left`} />
+            {/* <TimerBadge seconds={sectionRemainingSeconds} hydrated={hasHydrated} label={`${activeSection} left`} /> */}
             <div className="hidden sm:block">
               <TimerBadge seconds={remainingSeconds} hydrated={hasHydrated} label="Total" />
             </div>
@@ -1572,9 +1582,6 @@ export function AssessmentShell({
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="rounded-[8px] bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-800">
                     {activeQuestion.section}
-                  </span>
-                  <span className="rounded-[8px] bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600">
-                    {activeQuestion.difficulty || activeQuestion.topic || "Scenario"}
                   </span>
                   <span className="rounded-[8px] bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600">
                     {activeQuestion.marks || 5} marks
@@ -2134,7 +2141,7 @@ function AnswerPanel({
 }) {
   if (question.engine === "mcq") {
     return (
-      <section className={`${visible ? "block" : "hidden"} min-h-0 overflow-auto rounded-[14px] border border-slate-200 bg-white p-4 shadow-sm lg:block sm:p-5`}>
+        <section className={`${visible ? "block" : "hidden"} self-start overflow-auto rounded-[14px] border border-slate-200 bg-white p-4 shadow-sm lg:block sm:p-5`}>
         <div className="mb-4 border-b border-slate-100 pb-3">
           <p className="text-xs font-bold uppercase tracking-[0.16em] text-emerald-800">Answer Console</p>
           <p className="mt-1 text-xs text-slate-500">Select the best option for this scenario.</p>
@@ -2146,7 +2153,7 @@ function AnswerPanel({
 
   const languageOptions =
     question.engine === "sql"
-      ? [{ id: "sql", label: "PostgreSQL" }]
+      ? [{ id: "sql", label: "PostgreSQL 15" }]
       : (assessmentBank?.languages || []).filter((language) => question.allowed_languages?.includes(language.id));
 
   return (

@@ -40,7 +40,7 @@ export function McqPanel({ question, selected, onChange }: McqPanelProps) {
               className="mt-1"
             />
             <div className="min-w-0">
-              <span className="block font-semibold">{option.label}</span>
+              {/* <span className="block font-semibold">{option.label}</span> */}
               <span className="block break-words leading-6">{option.text}</span>
             </div>
           </label>
