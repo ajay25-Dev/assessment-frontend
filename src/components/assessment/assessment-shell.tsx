@@ -13,6 +13,7 @@ import {
   FileQuestion,
   Flag,
   Menu,
+  LogOut,
   PanelLeftClose,
   PanelLeftOpen,
   Play,
@@ -105,12 +106,16 @@ type DsaCalculationOutput = {
   matchedExpectedCode: string[];
   missingExpectedCode: string[];
   expectedTimeComplexity: string;
-  expectedTimeComplexityRank: number;
+  expectedTimeComplexityRank: number | "Not available";
+  expectedTimeComplexityLabel: string;
   studentTimeComplexityRank: number | "Not available";
+  studentTimeComplexityLabel: string;
   timeComplexityRankGap: number | "Not available";
   expectedSpaceComplexity: string;
-  expectedSpaceComplexityRank: number;
+  expectedSpaceComplexityRank: number | "Not available";
+  expectedSpaceComplexityLabel: string;
   studentSpaceComplexityRank: number | "Not available";
+  studentSpaceComplexityLabel: string;
   spaceComplexityRankGap: number | "Not available";
   expectedApproach: string[];
   expectedCode: string[];
@@ -390,6 +395,7 @@ function buildDsaCalculationOutput(
   question: AssessmentQuestion,
   answer: AnswerState,
   testResults: TestResultsOutput | null,
+  backendEvaluation: Record<string, unknown> | null = null,
 ): DsaCalculationOutput | null {
   if (question.section !== "DSA" || question.engine !== "code") return null;
 
@@ -402,39 +408,92 @@ function buildDsaCalculationOutput(
   const hiddenCases = question.hidden_test_cases?.length
     ? question.hidden_test_cases
     : question.test_cases?.slice(openCases.length) || [];
-  const results = testResults?.test_results || [];
+  const results = answer.testResults?.test_results || testResults?.test_results || [];
+  const backendOutput = backendEvaluation || {};
   const openResultCount = Math.min(openCases.length, results.length);
   const hiddenResultCount = Math.max(0, Math.min(hiddenCases.length, results.length - openResultCount));
   const openPassed = countPassed(results.slice(0, openResultCount));
   const hiddenPassed = countPassed(results.slice(openResultCount, openResultCount + hiddenResultCount));
   const openTotal = openCases.length;
   const hiddenTotal = hiddenCases.length;
-  const openTestCaseScore = scoreRatio(openPassed, openTotal);
-  const hiddenTestCaseScore = hiddenTotal > 0 ? scoreRatio(hiddenPassed, hiddenTotal) : "Not available";
-  const correctnessScore = openTestCaseScore;
-  const expectedCodeBreakdown = expectedCodeScore(expectedCode, code);
-  const approach = approachScore(expectedApproach, code, correctnessScore);
-  const expectedTimeComplexity = question.expected_time_complexity || "Not available";
-  const expectedSpaceComplexity = question.expected_space_complexity || "Not available";
-  const expectedTimeComplexityRank = resolveComplexityRankLocal(expectedTimeComplexity);
-  const expectedSpaceComplexityRank = resolveComplexityRankLocal(expectedSpaceComplexity);
-  const studentTimeComplexityRank = code ? inferStudentComplexityRank(code) : "Not available";
-  const studentSpaceComplexityRank = code ? inferStudentComplexityRank(code) : "Not available";
+  const openTestCaseScore = typeof backendOutput.open_test_case_score === "number"
+    ? backendOutput.open_test_case_score
+    : scoreRatio(openPassed, openTotal);
+  const hiddenTestCaseScore = typeof backendOutput.hidden_test_case_score === "number"
+    ? backendOutput.hidden_test_case_score
+    : hiddenTotal > 0
+      ? scoreRatio(hiddenPassed, hiddenTotal)
+      : "Not available";
+  const correctnessScore = typeof backendOutput.correctness_score === "number"
+    ? backendOutput.correctness_score
+    : openTestCaseScore;
+  const expectedCodeBreakdown = {
+    score: typeof backendOutput.expected_code_score === "number"
+      ? backendOutput.expected_code_score
+      : expectedCodeScore(expectedCode, code).score,
+    matched: Array.isArray(backendOutput.matched_expected_code)
+      ? backendOutput.matched_expected_code.map((item) => String(item))
+      : expectedCodeScore(expectedCode, code).matched,
+    missing: Array.isArray(backendOutput.missing_expected_code)
+      ? backendOutput.missing_expected_code.map((item) => String(item))
+      : expectedCodeScore(expectedCode, code).missing,
+  };
+  const approach = typeof backendOutput.approach_score === "number"
+    ? backendOutput.approach_score
+    : approachScore(expectedApproach, code, correctnessScore);
+  const expectedTimeComplexity = String(
+    backendOutput.expected_time_complexity || question.expected_time_complexity || "Not available",
+  );
+  const expectedSpaceComplexity = String(
+    backendOutput.expected_space_complexity || question.expected_space_complexity || "Not available",
+  );
+  const expectedTimeComplexityRank = typeof backendOutput.expected_time_complexity_rank === "number"
+    ? backendOutput.expected_time_complexity_rank
+    : "Not available";
+  const expectedSpaceComplexityRank = typeof backendOutput.expected_space_complexity_rank === "number"
+    ? backendOutput.expected_space_complexity_rank
+    : "Not available";
+  const expectedTimeComplexityLabel = String(
+    backendOutput.expected_time_complexity_label || (expectedTimeComplexityRank !== "Not available" ? `Rank ${expectedTimeComplexityRank}` : "AI evaluation pending"),
+  );
+  const expectedSpaceComplexityLabel = String(
+    backendOutput.expected_space_complexity_label || (expectedSpaceComplexityRank !== "Not available" ? `Rank ${expectedSpaceComplexityRank}` : "AI evaluation pending"),
+  );
+  const studentTimeComplexityRank = typeof backendOutput.student_time_complexity_rank === "number"
+    ? backendOutput.student_time_complexity_rank
+    : "Not available";
+  const studentSpaceComplexityRank = typeof backendOutput.student_space_complexity_rank === "number"
+    ? backendOutput.student_space_complexity_rank
+    : "Not available";
+  const studentTimeComplexityLabel = String(
+    backendOutput.student_time_complexity_label || (studentTimeComplexityRank !== "Not available" ? `Rank ${studentTimeComplexityRank}` : "AI evaluation pending"),
+  );
+  const studentSpaceComplexityLabel = String(
+    backendOutput.student_space_complexity_label || (studentSpaceComplexityRank !== "Not available" ? `Rank ${studentSpaceComplexityRank}` : "AI evaluation pending"),
+  );
   const timeComplexityRankGap =
     typeof studentTimeComplexityRank === "number"
-      ? studentTimeComplexityRank - expectedTimeComplexityRank
+      ? (typeof backendOutput.time_complexity_rank_gap === "number"
+          ? backendOutput.time_complexity_rank_gap
+          : typeof expectedTimeComplexityRank === "number"
+            ? studentTimeComplexityRank - expectedTimeComplexityRank
+            : "Not available")
       : "Not available";
   const spaceComplexityRankGap =
     typeof studentSpaceComplexityRank === "number"
-      ? studentSpaceComplexityRank - expectedSpaceComplexityRank
+      ? (typeof backendOutput.space_complexity_rank_gap === "number"
+          ? backendOutput.space_complexity_rank_gap
+          : typeof expectedSpaceComplexityRank === "number"
+            ? studentSpaceComplexityRank - expectedSpaceComplexityRank
+            : "Not available")
       : "Not available";
   const timeComplexityScore =
-    typeof studentTimeComplexityRank === "number"
-      ? rankGapScore(expectedTimeComplexityRank, studentTimeComplexityRank)
+    typeof backendOutput.time_complexity_score === "number"
+      ? backendOutput.time_complexity_score
       : "Not available";
   const spaceComplexityScore =
-    typeof studentSpaceComplexityRank === "number"
-      ? rankGapScore(expectedSpaceComplexityRank, studentSpaceComplexityRank)
+    typeof backendOutput.space_complexity_score === "number"
+      ? backendOutput.space_complexity_score
       : "Not available";
   const edgeCaseCandidates = results.filter((test) =>
     /(edge|boundary|empty|duplicate|null|zero|single|large|cycle|self|same)/i.test(
@@ -476,11 +535,15 @@ function buildDsaCalculationOutput(
     missingExpectedCode: expectedCodeBreakdown.missing,
     expectedTimeComplexity,
     expectedTimeComplexityRank,
+    expectedTimeComplexityLabel,
     studentTimeComplexityRank,
+    studentTimeComplexityLabel,
     timeComplexityRankGap,
     expectedSpaceComplexity,
     expectedSpaceComplexityRank,
+    expectedSpaceComplexityLabel,
     studentSpaceComplexityRank,
+    studentSpaceComplexityLabel,
     spaceComplexityRankGap,
     expectedApproach,
     expectedCode,
@@ -724,6 +787,7 @@ export function AssessmentShell({
   const [tabEvents, setTabEvents] = useState(initialTabEvents);
   const [cameraEvents, setCameraEvents] = useState(initialCameraEvents);
   const [persistedAttemptId, setPersistedAttemptId] = useState<string | null>(initialSnapshot.persistedAttemptId);
+  const [persistedDsaEvaluationByQuestion, setPersistedDsaEvaluationByQuestion] = useState<Record<string, Record<string, unknown> | null>>({});
   const [isExecuting, setIsExecuting] = useState(false);
   const [isFinalizing, setIsFinalizing] = useState(false);
   const [integrityViolation, setIntegrityViolation] = useState<IntegrityViolation | null>(null);
@@ -762,7 +826,12 @@ export function AssessmentShell({
   const activeQuestion = questions[Math.max(0, activeIndex)];
   const activeAnswer = answers[activeQuestion.id] || initialAnswer(activeQuestion);
   const activeTemporaryScorePreview = temporaryScorePreviewByQuestion[activeQuestion.id];
-  const activeDsaCalculationOutput = buildDsaCalculationOutput(activeQuestion, activeAnswer, testResults);
+  const activeDsaCalculationOutput = buildDsaCalculationOutput(
+    activeQuestion,
+    activeAnswer,
+    testResults,
+    persistedDsaEvaluationByQuestion[activeQuestion.id] || null,
+  );
   const navigationType = useMemo(() => {
     if (typeof window === "undefined" || typeof performance === "undefined") return "navigate";
     const entries = performance.getEntriesByType?.("navigation") || [];
@@ -1043,12 +1112,12 @@ export function AssessmentShell({
     setActiveTab("answer");
     setNavOpen(false);
     setSqlResult(null);
-    setTestResults(null);
+    setTestResults((current) => answers[questionId]?.testResults || current);
     setAnimatingTestIndex(-1);
     setAnswers((current) => ({
       ...current,
       [questionId]: {
-        ...(current[questionId] || initialAnswer(questions.find((question) => question.id === questionId) || activeQuestion)),
+        ...(current[questionId] || initialAnswer(targetQuestion)),
         status: current[questionId]?.status === "unvisited" ? "saved" : current[questionId]?.status || "saved",
       },
     }));
@@ -1106,7 +1175,11 @@ export function AssessmentShell({
         access_token: session?.access_token || null,
       }),
     });
-    const payload = (await response.json().catch(() => null)) as { attempt_id?: string; message?: string } | null;
+    const payload = (await response.json().catch(() => null)) as {
+      attempt_id?: string;
+      message?: string;
+      evaluation?: { output?: Record<string, unknown> };
+    } | null;
 
     if (!response.ok) {
       throw new Error(payload?.message || `DSA persistence failed with status ${response.status}`);
@@ -1115,6 +1188,13 @@ export function AssessmentShell({
     if (payload?.attempt_id) {
       setPersistedAttemptId(payload.attempt_id);
       localStorage.setItem(`${storageKey}:attemptId`, payload.attempt_id);
+    }
+
+    if (payload?.evaluation?.output) {
+      setPersistedDsaEvaluationByQuestion((current) => ({
+        ...current,
+        [activeQuestion.id]: payload.evaluation?.output || null,
+      }));
     }
   }
 
@@ -1767,6 +1847,17 @@ export function AssessmentShell({
             <div className="hidden sm:block">
               <TimerBadge seconds={remainingSeconds} hydrated={hasHydrated} label="Total" />
             </div>
+            <form action="/api/auth/signout" method="post">
+              <button
+                type="submit"
+                className="inline-flex h-10 items-center gap-2 rounded-[8px] border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+                aria-label="Logout"
+                title="Logout"
+              >
+                <LogOut size={16} />
+                <span className="hidden sm:inline">Logout</span>
+              </button>
+            </form>
             <button
               type="button"
               onClick={saveNow}
@@ -2071,8 +2162,7 @@ export function AssessmentShell({
                               : ""}
                           </div>
                           <div className="mt-2 text-xs text-sky-100/90">
-                            Calculated time complexity:{" "}
-                            {complexityRankLabelLocal(activeDsaCalculationOutput.studentTimeComplexityRank)}
+                            Calculated time complexity: {activeDsaCalculationOutput.studentTimeComplexityLabel}
                           </div>
                         </div>
                         <div className="rounded-[8px] border border-sky-700/30 bg-slate-950/40 p-3">
@@ -2085,8 +2175,7 @@ export function AssessmentShell({
                               : ""}
                           </div>
                           <div className="mt-2 text-xs text-sky-100/90">
-                            Calculated space complexity:{" "}
-                            {complexityRankLabelLocal(activeDsaCalculationOutput.studentSpaceComplexityRank)}
+                            Calculated space complexity: {activeDsaCalculationOutput.studentSpaceComplexityLabel}
                           </div>
                         </div>
                       </div>

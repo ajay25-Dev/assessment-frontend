@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { redirect } from "next/navigation";
 import { AssessmentEntryGate } from "./assessment-entry-gate";
+import { AuthenticatedHeader } from "@/components/authenticated-header";
 import { supabaseService } from "@/lib/supabase-service";
 import { supabaseServer } from "@/lib/supabase-server";
 
@@ -128,21 +129,11 @@ export default async function AssessmentStartPage({ searchParams }: PageProps) {
 
   return (
     <main className="min-h-dvh bg-[#f6f8f4]">
-      <div className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:px-8">
-          <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.18em] text-emerald-800">
-              Jora Assessment
-            </p>
-            <h1 className="mt-1 text-xl font-semibold text-slate-950">Assessment Welcome</h1>
-          </div>
-          <form action="/api/auth/signout" method="post">
-            <button className="rounded-[8px] border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50">
-              Sign out
-            </button>
-          </form>
-        </div>
-      </div>
+      <AuthenticatedHeader
+        eyebrow="Jora Assessment"
+        title="Assessment Welcome"
+        subtitle="Review the assessment structure, timings, and rules before entering the workspace."
+      />
 
       <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
         <section className="overflow-hidden rounded-[8px] border border-slate-200 bg-white shadow-sm">

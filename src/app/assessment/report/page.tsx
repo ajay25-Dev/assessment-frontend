@@ -1,6 +1,7 @@
 import { CheckCircle2, ListChecks, ShieldAlert } from "lucide-react";
 import { redirect } from "next/navigation";
 import { FinalizeStageRunner } from "@/components/assessment/finalize-stage-runner";
+import { AuthenticatedHeader } from "@/components/authenticated-header";
 import { sectionOrder } from "@/data/assessment-bank";
 import { fetchAssessmentBank } from "@/lib/assessment-bank-api";
 import { supabaseService } from "@/lib/supabase-service";
@@ -87,6 +88,14 @@ export default async function AssessmentReportPage({ searchParams }: PageProps) 
 
   const serviceSupabase = supabaseService();
   const showDebugCalculations = process.env.NODE_ENV !== "production";
+  const reportHeader = (
+    <AuthenticatedHeader
+      eyebrow="Jora Assessment"
+      title="Assessment Report"
+      subtitle="Review the submitted attempt, section counts, and scoring breakdown."
+      email={user.email}
+    />
+  );
   let reportQuery = serviceSupabase
     .from("student_assessment_reports")
     .select(
@@ -187,8 +196,10 @@ export default async function AssessmentReportPage({ searchParams }: PageProps) 
       attempt.client_metadata?.integrity_status === "disqualified";
 
     return (
-      <main className="grid min-h-dvh place-items-center bg-[#f6f8f4] px-4 py-6 text-slate-950 sm:px-6 lg:px-8">
-        <section className="w-full max-w-5xl overflow-hidden rounded-[8px] border border-slate-200 bg-white shadow-sm">
+      <>
+        {reportHeader}
+        <main className="grid min-h-dvh place-items-center bg-[#f6f8f4] px-4 py-6 text-slate-950 sm:px-6 lg:px-8">
+          <section className="w-full max-w-5xl overflow-hidden rounded-[8px] border border-slate-200 bg-white shadow-sm">
           <div className="bg-[linear-gradient(135deg,#0f3d2e_0%,#126149_58%,#e2c45b_180%)] px-5 py-6 text-white sm:px-8">
             <p className="inline-flex items-center gap-2 rounded-[8px] bg-white/12 px-3 py-1 text-sm font-semibold text-emerald-50">
               {isDisqualified ? <ShieldAlert size={16} /> : <CheckCircle2 size={16} />}
@@ -278,8 +289,9 @@ export default async function AssessmentReportPage({ searchParams }: PageProps) 
               </section>
             ) : null}
           </div>
-        </section>
-      </main>
+          </section>
+        </main>
+      </>
     );
   }
   const reportJson = (report.report_json || {}) as IntegrityReport & JsonRecord;
@@ -312,8 +324,10 @@ export default async function AssessmentReportPage({ searchParams }: PageProps) 
   });
 
   return (
-    <main className="grid min-h-dvh place-items-center bg-[#f6f8f4] px-4 py-6 text-slate-950 sm:px-6 lg:px-8">
-      <section className="w-full max-w-5xl overflow-hidden rounded-[8px] border border-slate-200 bg-white shadow-sm">
+    <>
+      {reportHeader}
+      <main className="grid min-h-dvh place-items-center bg-[#f6f8f4] px-4 py-6 text-slate-950 sm:px-6 lg:px-8">
+        <section className="w-full max-w-5xl overflow-hidden rounded-[8px] border border-slate-200 bg-white shadow-sm">
         <div className="bg-[linear-gradient(135deg,#0f3d2e_0%,#126149_58%,#e2c45b_180%)] px-5 py-6 text-white sm:px-8">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
@@ -423,5 +437,6 @@ export default async function AssessmentReportPage({ searchParams }: PageProps) 
         </div>
       </section>
     </main>
+    </>
   );
 }

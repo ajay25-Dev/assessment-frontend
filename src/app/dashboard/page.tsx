@@ -10,7 +10,6 @@ import {
   Database,
   Gauge,
   GraduationCap,
-  LogOut,
   Target,
   TrendingUp,
   Wrench,
@@ -18,6 +17,7 @@ import {
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { AuthenticatedHeader } from "@/components/authenticated-header";
 import { supabaseService } from "@/lib/supabase-service";
 import { supabaseServer } from "@/lib/supabase-server";
 import { getAuthRole, normalizeRole } from "@/lib/user-role";
@@ -357,27 +357,6 @@ function AvailableAssessments({ assessments }: { assessments: AvailableAssessmen
           </Link>
         </article>
       ))}
-    </div>
-  );
-}
-
-function DashboardTopBar() {
-  return (
-    <div className="border-b border-slate-200 bg-white">
-      <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:px-8">
-        <div>
-          <p className="text-sm font-semibold uppercase tracking-[0.18em] text-emerald-800">
-            Jora Assessment
-          </p>
-          <h1 className="mt-1 text-xl font-semibold text-slate-950">Student Dashboard</h1>
-        </div>
-        <form action="/api/auth/signout" method="post">
-          <button className="inline-flex h-10 items-center gap-2 rounded-[8px] border border-slate-300 bg-white px-3 text-sm font-medium text-slate-800 hover:bg-slate-50">
-            <LogOut size={16} />
-            Sign out
-          </button>
-        </form>
-      </div>
     </div>
   );
 }
@@ -797,7 +776,12 @@ export default async function DashboardPage() {
 
   return (
     <main className="min-h-dvh bg-[#f6f8f4]">
-      <DashboardTopBar />
+      <AuthenticatedHeader
+        eyebrow="Jora Assessment"
+        title="Student Dashboard"
+        subtitle="Review your available assessment, report history, and current readiness status."
+        email={user.email}
+      />
 
       <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
         <section className="overflow-hidden rounded-[8px] border border-slate-200 bg-white shadow-sm">
