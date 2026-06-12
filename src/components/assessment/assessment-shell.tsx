@@ -26,7 +26,14 @@ import { useRouter } from "next/navigation";
 import { CodeEditor } from "@/components/editor/code-editor";
 import { McqPanel } from "@/components/mcq/mcq-panel";
 import { SqlResultGrid } from "@/components/sql/sql-result-grid";
-import { sectionOrder, type AssessmentBank, type AssessmentQuestion, type AssessmentSectionId } from "@/data/assessment-bank";
+import { supabaseBrowser } from "@/lib/supabase-browser";
+import {
+  getLanguageDisplayLabel,
+  sectionOrder,
+  type AssessmentBank,
+  type AssessmentQuestion,
+  type AssessmentSectionId,
+} from "@/data/assessment-bank";
 
 type AnswerState = {
   value: string;
@@ -38,6 +45,7 @@ type AnswerState = {
   status: "unvisited" | "saved" | "ran" | "submitted";
   resultMessage: string;
   sqlExecutionMs: number | null;
+  testResults?: TestResultsOutput | null;
 };
 
 type ActiveTab = "problem" | "answer" | "results";
@@ -70,19 +78,46 @@ type TestResultsOutput = {
   passed: number;
 };
 
-type SubmittedInputDebug = {
-  submittedAt: string;
-  endpoint: string;
-  method: "POST";
-  body: Record<string, unknown>;
+type TemporaryScorePreview = {
+  label: string;
+  score: string;
+  detail: string;
+  note: string;
+  updatedAt: string;
 };
 
-type AiEvaluationDebug = {
-  requestedAt: string;
-  endpoint: string;
-  input: Record<string, unknown>;
-  output?: unknown;
-  error?: string;
+type DsaCalculationOutput = {
+  score: string;
+  correctnessScore: number;
+  openTestCaseScore: number;
+  hiddenTestCaseScore: number | "Not available";
+  expectedCodeScore: number;
+  approachScore: number;
+  timeComplexityScore: number | "Not available";
+  spaceComplexityScore: number | "Not available";
+  edgeCaseScore: number | "Not available";
+  overallQuestionScore: number;
+  passed: number;
+  total: number;
+  openTestsPassed: string;
+  hiddenTestsPassed: string;
+  totalTestsPassed: string;
+  matchedExpectedCode: string[];
+  missingExpectedCode: string[];
+  expectedTimeComplexity: string;
+  expectedTimeComplexityRank: number;
+  studentTimeComplexityRank: number | "Not available";
+  timeComplexityRankGap: number | "Not available";
+  expectedSpaceComplexity: string;
+  expectedSpaceComplexityRank: number;
+  studentSpaceComplexityRank: number | "Not available";
+  spaceComplexityRankGap: number | "Not available";
+  expectedApproach: string[];
+  expectedCode: string[];
+  failedCaseAnalysis: string[];
+  missedEdgeCases: string[];
+  note: string;
+  updatedAt: string;
 };
 
 type IntegrityViolation = {
@@ -92,6 +127,10 @@ type IntegrityViolation = {
 };
 
 const defaultLanguage = "python";
+const localProctoringOverride = process.env.NEXT_PUBLIC_DISABLE_PROCTORING;
+const localProctoringDisabled =
+  localProctoringOverride === "true" ||
+  (process.env.NODE_ENV !== "production" && localProctoringOverride !== "false");
 const defaultSectionDurations: Record<AssessmentSectionId, number> = {
   DSA: 90,
   SQL: 30,
@@ -116,11 +155,116 @@ function sameStringSet(left: string[], right: string[]) {
   return left.every((item) => rightSet.has(item));
 }
 
-function evaluationEndpointForQuestion(question: AssessmentQuestion) {
-  if (question.section === "SQL") return "sql";
-  if (question.section === "OOPs") return "oops";
-  if (question.section === "MCQ") return "mcq";
-  return "dsa";
+function normalizeText(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function stringList(value: unknown) {
+  return Array.isArray(value)
+    ? value.map((item) => String(item).trim()).filter(Boolean)
+    : [];
+}
+
+function scoreRatio(passed: number, total: number) {
+  if (!total) return 0;
+  return Math.max(0, Math.min(100, Math.round((passed / total) * 100)));
+}
+
+function countPassed(results: TestResult[]) {
+  return results.filter((result) => result.passed).length;
+}
+
+function visibleAndHiddenCounts(testResults: TestResultsOutput | null) {
+  const results = testResults?.test_results || [];
+  const visible = results.filter((test) => test.displayStatus === "visible");
+  const hidden = results.filter((test) => test.displayStatus !== "visible");
+  return {
+    visible,
+    hidden,
+    visiblePassed: countPassed(visible),
+    hiddenPassed: countPassed(hidden),
+  };
+}
+
+function expectedCodeScore(expectedSignals: string[], code: string) {
+  const uniqueSignals = [...new Set(expectedSignals.map((item) => item.trim()).filter(Boolean))];
+  if (!uniqueSignals.length) return { score: 0, matched: [], missing: [] };
+
+  const normalizedCode = normalizeText(code);
+  const matched = uniqueSignals.filter((signal) => normalizedCode.includes(normalizeText(signal).replace(/\s+/g, "")));
+  return {
+    score: Math.max(0, Math.min(100, Math.round((matched.length / uniqueSignals.length) * 100))),
+    matched,
+    missing: uniqueSignals.filter((signal) => !matched.includes(signal)),
+  };
+}
+
+function approachScore(expectedApproach: string[], code: string, correctnessScore: number) {
+  const tokens = new Set(normalizeText(code).split(/\s+/).filter(Boolean));
+  const matches = expectedApproach.map((item) => {
+    const point = normalizeText(item);
+    if (!point) return 0;
+    const words = point.split(/\s+/).filter((word) => word.length > 2);
+    if (!words.length) return 0;
+    const matched = words.filter((word) => tokens.has(word)).length;
+    if (matched >= Math.max(2, Math.ceil(words.length * 0.6))) return 1;
+    if (matched >= Math.max(1, Math.ceil(words.length * 0.3))) return 0.5;
+    return 0;
+  });
+  const matchPercentage = Math.max(
+    0,
+    Math.min(100, Math.round((matches.reduce((sum: number, value) => sum + value, 0) / (expectedApproach.length || 1)) * 100)),
+  );
+  return Math.max(0, Math.min(100, Math.round(0.75 * matchPercentage + 0.25 * correctnessScore)));
+}
+
+function resolveComplexityRankLocal(value: string) {
+  const normalized = normalizeText(value).replace(/\s+/g, "");
+  const rankings: Array<[number, string[]]> = [
+    [1, ["o1", "constant", "constanttime", "constantspace"]],
+    [3, ["ologn", "binarysearch", "balancedtree"]],
+    [9, ["on", "linear", "depth", "totalversions", "versionchain", "depthperget", "o(depth)perget,o(1)perset".replace(/[^a-z0-9]/g, "")]],
+    [11, ["onlogn", "heap", "priorityqueue", "sort"]],
+    [16, ["on2", "quadratic", "doubleloop"]],
+    [35, ["o2n", "2n", "exponential", "subset", "bitmask", "powerset"]],
+    [41, ["on!", "factorial", "permutation"]],
+    [50, ["unknown", "notavailable"]],
+  ];
+
+  for (const [rank, aliases] of rankings) {
+    if (aliases.some((alias) => normalized.includes(alias))) return rank;
+  }
+  return 50;
+}
+
+function inferStudentComplexityRank(code: string) {
+  const normalized = normalizeText(code);
+  if (/(bitmask|subset|powerset)/.test(normalized)) return 35;
+  if (/(memo|memoization|cache|dp)/.test(normalized)) return 9;
+  if (/(heap|priority queue|priorityqueue|sort)/.test(normalized)) return 11;
+  if (/(graph|bfs|dfs|adjacency|recursion)/.test(normalized)) return 9;
+  if (/(double loop|nested loop|for .* for)/.test(normalized)) return 16;
+  if (/(map|set|hash)/.test(normalized)) return 9;
+  if (/(array|new array)/.test(normalized)) return 9;
+  return 50;
+}
+
+function rankGapScore(expectedRank: number, studentRank: number) {
+  const gap = studentRank - expectedRank;
+  if (gap <= 0) return 100;
+  return Math.max(0, 100 - gap * 10);
+}
+
+function complexityRankLabelLocal(rank: number | "Not available") {
+  if (typeof rank !== "number") return "Not available";
+  if (rank <= 1) return "O(1)";
+  if (rank <= 3) return "O(log n)";
+  if (rank <= 9) return "O(n)";
+  if (rank <= 11) return "O(n log n)";
+  if (rank <= 16) return "O(n^2)";
+  if (rank <= 35) return "O(2^n)";
+  if (rank <= 41) return "O(n!)";
+  return "O(unknown)";
 }
 
 function visibleTestResultsForQuestion(question: AssessmentQuestion): TestResultsOutput | null {
@@ -154,6 +298,199 @@ function initialAnswer(question: AssessmentQuestion): AnswerState {
     status: "unvisited",
     resultMessage: "No run yet.",
     sqlExecutionMs: null,
+    testResults: null,
+  };
+}
+
+function stripTransientAnswerData(answer: AnswerState): AnswerState {
+  return {
+    ...answer,
+    testResults: null,
+  };
+}
+
+function sanitizeAnswersForStorage(answers: Record<string, AnswerState>) {
+  return Object.fromEntries(Object.entries(answers).map(([questionId, answer]) => [questionId, stripTransientAnswerData(answer)])) as Record<
+    string,
+    AnswerState
+  >;
+}
+
+function buildTemporaryScorePreview(
+  question: AssessmentQuestion,
+  answer: AnswerState,
+  testResults: TestResultsOutput | null,
+): TemporaryScorePreview | null {
+  const updatedAt = new Date().toISOString();
+
+  if (question.engine === "code") {
+    if (!testResults?.total) {
+      return {
+        label: "Temporary score preview",
+        score: "Unavailable",
+        detail: "Structured test results were not returned by the runner.",
+        note: "This preview is local-only and is not saved.",
+        updatedAt,
+      };
+    }
+
+    const percent = Math.round((testResults.passed / testResults.total) * 100);
+    const visibleOnly = testResults.test_results.every((test) => test.displayStatus === "visible");
+    if (visibleOnly) {
+      return {
+        label: "Temporary score preview",
+        score: "Preview only",
+        detail: `${testResults.total} visible case(s) loaded`,
+        note: "Visible cases do not produce a final score. This preview is local-only and is not saved.",
+        updatedAt,
+      };
+    }
+
+    return {
+      label: "Temporary score preview",
+      score: `${percent}%`,
+      detail: `${testResults.passed}/${testResults.total} tests passed`,
+      note: "Computed from structured runner output. Local preview is not saved.",
+      updatedAt,
+    };
+  }
+
+  if (question.engine === "mcq") {
+    const correctOptions = question.correct_options || [];
+    if (!correctOptions.length) {
+      return {
+        label: "Temporary score preview",
+        score: "Unavailable",
+        detail: "No answer key is configured for this MCQ.",
+        note: "This preview is local-only and is not saved.",
+        updatedAt,
+      };
+    }
+
+    const isExactMatch = sameStringSet(answer.selectedOptions, correctOptions);
+    return {
+      label: "Temporary score preview",
+      score: isExactMatch ? "100%" : "0%",
+      detail: `${answer.selectedOptions.length}/${correctOptions.length} option(s) matched`,
+      note: "Computed locally from the MCQ answer key. Local preview is not saved.",
+      updatedAt,
+    };
+  }
+
+  return {
+    label: "Temporary score preview",
+    score: "Not computed",
+    detail: "SQL scoring is not stored in the temporary window.",
+    note: "This panel only shows the live query result for local testing.",
+    updatedAt,
+  };
+}
+
+function buildDsaCalculationOutput(
+  question: AssessmentQuestion,
+  answer: AnswerState,
+  testResults: TestResultsOutput | null,
+): DsaCalculationOutput | null {
+  if (question.section !== "DSA" || question.engine !== "code") return null;
+
+  const code = answer.value || "";
+  const expectedApproach = stringList(question.expected_approach);
+  const expectedCode = stringList(question.expected_code);
+  const openCases = question.open_test_cases?.length
+    ? question.open_test_cases
+    : question.test_cases?.slice(0, 5) || [];
+  const hiddenCases = question.hidden_test_cases?.length
+    ? question.hidden_test_cases
+    : question.test_cases?.slice(openCases.length) || [];
+  const results = testResults?.test_results || [];
+  const openResultCount = Math.min(openCases.length, results.length);
+  const hiddenResultCount = Math.max(0, Math.min(hiddenCases.length, results.length - openResultCount));
+  const openPassed = countPassed(results.slice(0, openResultCount));
+  const hiddenPassed = countPassed(results.slice(openResultCount, openResultCount + hiddenResultCount));
+  const openTotal = openCases.length;
+  const hiddenTotal = hiddenCases.length;
+  const openTestCaseScore = scoreRatio(openPassed, openTotal);
+  const hiddenTestCaseScore = hiddenTotal > 0 ? scoreRatio(hiddenPassed, hiddenTotal) : "Not available";
+  const correctnessScore = openTestCaseScore;
+  const expectedCodeBreakdown = expectedCodeScore(expectedCode, code);
+  const approach = approachScore(expectedApproach, code, correctnessScore);
+  const expectedTimeComplexity = question.expected_time_complexity || "Not available";
+  const expectedSpaceComplexity = question.expected_space_complexity || "Not available";
+  const expectedTimeComplexityRank = resolveComplexityRankLocal(expectedTimeComplexity);
+  const expectedSpaceComplexityRank = resolveComplexityRankLocal(expectedSpaceComplexity);
+  const studentTimeComplexityRank = code ? inferStudentComplexityRank(code) : "Not available";
+  const studentSpaceComplexityRank = code ? inferStudentComplexityRank(code) : "Not available";
+  const timeComplexityRankGap =
+    typeof studentTimeComplexityRank === "number"
+      ? studentTimeComplexityRank - expectedTimeComplexityRank
+      : "Not available";
+  const spaceComplexityRankGap =
+    typeof studentSpaceComplexityRank === "number"
+      ? studentSpaceComplexityRank - expectedSpaceComplexityRank
+      : "Not available";
+  const timeComplexityScore =
+    typeof studentTimeComplexityRank === "number"
+      ? rankGapScore(expectedTimeComplexityRank, studentTimeComplexityRank)
+      : "Not available";
+  const spaceComplexityScore =
+    typeof studentSpaceComplexityRank === "number"
+      ? rankGapScore(expectedSpaceComplexityRank, studentSpaceComplexityRank)
+      : "Not available";
+  const edgeCaseCandidates = results.filter((test) =>
+    /(edge|boundary|empty|duplicate|null|zero|single|large|cycle|self|same)/i.test(
+      `${test.purpose} ${test.input} ${test.expected}`,
+    ),
+  ) || [];
+  const edgeCasePassed = edgeCaseCandidates.filter((test) => test.passed).length;
+  const edgeCaseScore = edgeCaseCandidates.length
+    ? scoreRatio(edgeCasePassed, edgeCaseCandidates.length)
+    : "Not available";
+  const scoreParts = [
+    correctnessScore,
+    expectedCodeBreakdown.score,
+    typeof timeComplexityScore === "number" ? timeComplexityScore : null,
+    typeof spaceComplexityScore === "number" ? spaceComplexityScore : null,
+    typeof edgeCaseScore === "number" ? edgeCaseScore : null,
+  ].filter((value): value is number => typeof value === "number");
+  const overallQuestionScore = scoreParts.length
+    ? Math.round(scoreParts.reduce((sum, value) => sum + value, 0) / scoreParts.length)
+    : 0;
+
+  return {
+    score: `${overallQuestionScore}%`,
+    correctnessScore,
+    openTestCaseScore,
+    hiddenTestCaseScore,
+    expectedCodeScore: expectedCodeBreakdown.score,
+    approachScore: approach,
+    timeComplexityScore,
+    spaceComplexityScore,
+    edgeCaseScore,
+    overallQuestionScore,
+    passed: openPassed + hiddenPassed,
+    total: openResultCount + hiddenResultCount,
+    openTestsPassed: `${openPassed} / ${openTotal}`,
+    hiddenTestsPassed: hiddenTotal > 0 ? `${hiddenPassed} / ${hiddenTotal}` : "Not available",
+    totalTestsPassed: `${openPassed + hiddenPassed} / ${openTotal + hiddenTotal}`,
+    matchedExpectedCode: expectedCodeBreakdown.matched,
+    missingExpectedCode: expectedCodeBreakdown.missing,
+    expectedTimeComplexity,
+    expectedTimeComplexityRank,
+    studentTimeComplexityRank,
+    timeComplexityRankGap,
+    expectedSpaceComplexity,
+    expectedSpaceComplexityRank,
+    studentSpaceComplexityRank,
+    spaceComplexityRankGap,
+    expectedApproach,
+    expectedCode,
+    failedCaseAnalysis: edgeCaseCandidates.filter((test) => !test.passed).map((test) => test.purpose),
+    missedEdgeCases: edgeCaseCandidates.filter((test) => !test.passed).map((test) => test.purpose),
+    note:
+      openTotal + hiddenTotal > 0
+        ? "Calculated locally from structured test output. This is not persisted."
+        : "No structured test output returned yet.",
+    updatedAt: new Date().toISOString(),
   };
 }
 
@@ -299,12 +636,14 @@ function loadInitialSnapshot(assessmentBank: AssessmentBank) {
     remainingSeconds: initialTiming.totalRemainingSeconds,
     tabEvents: 0,
     cameraEvents: 0,
+    persistedAttemptId: null as string | null,
   };
 }
 
 function loadSavedSnapshot(assessmentBank: AssessmentBank, assessmentInstanceId?: string, studentId?: string) {
   const questions = assessmentBank.questions;
   const storageKey = storageKeyForBank(assessmentBank, assessmentInstanceId, studentId);
+  const attemptIdKey = `${storageKey}:attemptId`;
   const fallback = loadInitialSnapshot(assessmentBank);
   if (typeof window === "undefined") return fallback;
 
@@ -332,21 +671,24 @@ function loadSavedSnapshot(assessmentBank: AssessmentBank, assessmentInstanceId?
     const startedAt = parsed.startedAt || window.localStorage.getItem(`${storageKey}:startedAt`);
     const elapsed = startedAt ? Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000) : 0;
     const timing = sectionTimingForElapsed(assessmentBank, elapsed);
+    const persistedAttemptId = window.localStorage.getItem(attemptIdKey);
     const savedActiveQuestion = parsed.activeQuestionId
       ? questions.find((question) => question.id === parsed.activeQuestionId)
       : null;
     const activeSection = savedActiveQuestion?.section || parsed.activeSection || timing.activeSection;
     return {
       activeQuestionId: savedActiveQuestion?.id || firstQuestionInSection(questions, activeSection),
-      answers: { ...fallback.answers, ...(parsed.answers || {}) },
+      answers: sanitizeAnswersForStorage({ ...fallback.answers, ...(parsed.answers || {}) }),
       activeSection,
       sectionRemainingSeconds: timing.sectionRemainingSeconds,
       remainingSeconds: timing.totalRemainingSeconds,
       tabEvents: parsed.tabEvents || 0,
       cameraEvents: parsed.cameraEvents || 0,
+      persistedAttemptId,
     };
   } catch {
     window.localStorage.removeItem(storageKey);
+    window.localStorage.removeItem(attemptIdKey);
     return fallback;
   }
 }
@@ -361,41 +703,14 @@ export function AssessmentShell({
   studentId?: string;
 }) {
   const router = useRouter();
+  const authClient = useMemo(() => supabaseBrowser(), []);
   const questions = assessmentBank.questions;
   const storageKey = storageKeyForBank(assessmentBank, assessmentInstanceId, studentId);
   const legacyStorageKey = `joraiq-assessment:${assessmentStorageScope(assessmentBank, assessmentInstanceId)}`;
-  
-  // Client-side guard: on mount, check database for existing attempts and redirect
-  // This catches cases where the server-side check was bypassed (e.g. no assessmentId in URL)
-  useEffect(() => {
-    if (!assessmentInstanceId) return;
-    if (typeof window !== "undefined" && window.location.hostname === "localhost") return;
-    
-    let cancelled = false;
-    fetch("/api/assessment/check-attempt", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ assessment_id: assessmentInstanceId }),
-    })
-      .then((res) => res.json().catch(() => null) as Promise<{ hasAttempt: boolean; attemptId?: string } | null>)
-      .then((data) => {
-        if (cancelled) return;
-        if (data?.hasAttempt && data?.attemptId) {
-          localStorage.removeItem(storageKey);
-          localStorage.removeItem(`${storageKey}:startedAt`);
-          localStorage.removeItem(legacyStorageKey);
-          localStorage.removeItem(`${legacyStorageKey}:startedAt`);
-          router.replace(`/assessment/report?attemptId=${encodeURIComponent(data.attemptId)}`);
-        }
-      })
-      .catch(() => {
-        // Silently fail - the server-side check or finalize will catch this
-      });
-    
-    return () => { cancelled = true; };
-  }, [assessmentInstanceId, legacyStorageKey, router, storageKey]);
-  
+
   const [initialSnapshot] = useState(() => loadInitialSnapshot(assessmentBank));
+  const initialTabEvents = localProctoringDisabled ? 0 : initialSnapshot.tabEvents;
+  const initialCameraEvents = localProctoringDisabled ? 0 : initialSnapshot.cameraEvents;
   const [activeQuestionId, setActiveQuestionId] = useState(initialSnapshot.activeQuestionId);
   const [answers, setAnswers] = useState<Record<string, AnswerState>>(initialSnapshot.answers);
   const [activeSection, setActiveSection] = useState<AssessmentSectionId>(initialSnapshot.activeSection);
@@ -406,8 +721,9 @@ export function AssessmentShell({
   const [navOpen, setNavOpen] = useState(false);
   const [isQuestionPanelPinned, setIsQuestionPanelPinned] = useState(false);
   const [activeTab, setActiveTab] = useState<ActiveTab>("answer");
-  const [tabEvents, setTabEvents] = useState(initialSnapshot.tabEvents);
-  const [cameraEvents, setCameraEvents] = useState(initialSnapshot.cameraEvents);
+  const [tabEvents, setTabEvents] = useState(initialTabEvents);
+  const [cameraEvents, setCameraEvents] = useState(initialCameraEvents);
+  const [persistedAttemptId, setPersistedAttemptId] = useState<string | null>(initialSnapshot.persistedAttemptId);
   const [isExecuting, setIsExecuting] = useState(false);
   const [isFinalizing, setIsFinalizing] = useState(false);
   const [integrityViolation, setIntegrityViolation] = useState<IntegrityViolation | null>(null);
@@ -434,8 +750,7 @@ export function AssessmentShell({
   });
   const [sqlResult, setSqlResult] = useState<SqlRunResponse | null>(null);
   const [testResults, setTestResults] = useState<TestResultsOutput | null>(null);
-  const [submittedInputDebugByQuestion, setSubmittedInputDebugByQuestion] = useState<Record<string, SubmittedInputDebug>>({});
-  const [aiEvaluationDebugByQuestion, setAiEvaluationDebugByQuestion] = useState<Record<string, AiEvaluationDebug>>({});
+  const [temporaryScorePreviewByQuestion, setTemporaryScorePreviewByQuestion] = useState<Record<string, TemporaryScorePreview | null>>({});
   const [animatingTestIndex, setAnimatingTestIndex] = useState<number>(-1);
   const resultsRef = useRef<HTMLDivElement>(null);
   const cameraVideoRef = useRef<HTMLVideoElement>(null);
@@ -446,9 +761,27 @@ export function AssessmentShell({
   const activeIndex = questions.findIndex((question) => question.id === activeQuestionId);
   const activeQuestion = questions[Math.max(0, activeIndex)];
   const activeAnswer = answers[activeQuestion.id] || initialAnswer(activeQuestion);
-  const activeSubmittedInputDebug = submittedInputDebugByQuestion[activeQuestion.id];
-  const activeAiEvaluationDebug = aiEvaluationDebugByQuestion[activeQuestion.id];
+  const activeTemporaryScorePreview = temporaryScorePreviewByQuestion[activeQuestion.id];
+  const activeDsaCalculationOutput = buildDsaCalculationOutput(activeQuestion, activeAnswer, testResults);
+  const navigationType = useMemo(() => {
+    if (typeof window === "undefined" || typeof performance === "undefined") return "navigate";
+    const entries = performance.getEntriesByType?.("navigation") || [];
+    const entry = entries[0] as PerformanceNavigationTiming | undefined;
+    if (entry?.type) return entry.type;
+
+    const legacyType = (performance as Performance & { navigation?: { type?: number } }).navigation?.type;
+    if (legacyType === 1) return "reload";
+    return "navigate";
+  }, []);
   const tabSecurity = useMemo(() => {
+    if (localProctoringDisabled) {
+      return {
+        enabled: false,
+        maxEvents: 1,
+        autoSubmitOnMax: false,
+      };
+    }
+
     const configured = assessmentBank.assessment.security;
     const envEnabled = publicEnvEnabled(process.env.NEXT_PUBLIC_ASSESSMENT_TAB_SECURITY_ENABLED);
     const envMaxEvents = publicEnvNumber(process.env.NEXT_PUBLIC_ASSESSMENT_TAB_SECURITY_MAX_EVENTS);
@@ -459,6 +792,14 @@ export function AssessmentShell({
     };
   }, [assessmentBank.assessment.security]);
   const cameraSecurity = useMemo(() => {
+    if (localProctoringDisabled) {
+      return {
+        enabled: false,
+        maxEvents: 1,
+        autoSubmitOnMax: false,
+      };
+    }
+
     const configured = assessmentBank.assessment.security;
     const envEnabled = publicEnvEnabled(process.env.NEXT_PUBLIC_ASSESSMENT_CAMERA_PROCTORING_ENABLED);
     const envMaxEvents = publicEnvNumber(process.env.NEXT_PUBLIC_ASSESSMENT_CAMERA_MAX_EVENTS);
@@ -480,8 +821,9 @@ export function AssessmentShell({
       setActiveSection(savedSnapshot.activeSection);
       setSectionRemainingSeconds(savedSnapshot.sectionRemainingSeconds);
       setRemainingSeconds(savedSnapshot.remainingSeconds);
-      setTabEvents(savedSnapshot.tabEvents);
-      setCameraEvents(savedSnapshot.cameraEvents);
+      setTabEvents(localProctoringDisabled ? 0 : savedSnapshot.tabEvents);
+      setCameraEvents(localProctoringDisabled ? 0 : savedSnapshot.cameraEvents);
+      setPersistedAttemptId(savedSnapshot.persistedAttemptId || null);
       setHasHydrated(true);
     }, 0);
 
@@ -549,7 +891,7 @@ export function AssessmentShell({
         storageKey,
         JSON.stringify({
           ...(existing ? JSON.parse(existing) : {}),
-          answers,
+          answers: sanitizeAnswersForStorage(answers),
           activeQuestionId,
           startedAt,
           activeSection,
@@ -591,7 +933,6 @@ export function AssessmentShell({
     message: string,
   ) => {
     if (isFinalizing || autoSubmitStartedRef.current || isIntegrityLocked) return;
-    if (typeof window !== "undefined" && window.location.hostname === "localhost") return;
 
     cameraStream?.getTracks().forEach((track) => track.stop());
     setIntegrityViolation({ source, eventCount, message });
@@ -620,13 +961,11 @@ export function AssessmentShell({
     });
 
     const reachedLimit = nextCount >= cameraSecurity.maxEvents;
-    if (typeof window === "undefined" || window.location.hostname !== "localhost") {
-      window.alert(
-        reachedLimit
-          ? `Camera warning ${nextCount}/${cameraSecurity.maxEvents}: ${message}. The assessment has been disqualified.`
-          : `Camera warning ${nextCount}/${cameraSecurity.maxEvents}: ${message}`,
-      );
-    }
+    window.alert(
+      reachedLimit
+        ? `Camera warning ${nextCount}/${cameraSecurity.maxEvents}: ${message}. The assessment has been disqualified.`
+        : `Camera warning ${nextCount}/${cameraSecurity.maxEvents}: ${message}`,
+    );
     if (reachedLimit && cameraSecurity.autoSubmitOnMax) {
       void disqualifyAssessment("camera", nextCount, `Camera warning ${nextCount}/${cameraSecurity.maxEvents}: ${message}`);
     }
@@ -695,128 +1034,6 @@ export function AssessmentShell({
     });
   }
 
-  function recordSubmittedInput(questionId: string, endpoint: string, body: Record<string, unknown>) {
-    setSubmittedInputDebugByQuestion((current) => ({
-      ...current,
-      [questionId]: {
-        submittedAt: new Date().toISOString(),
-        endpoint,
-        method: "POST",
-        body,
-      },
-    }));
-  }
-
-  function buildEvaluationInput(question: AssessmentQuestion, answer: AnswerState, resultSummary: string): Record<string, unknown> {
-    if (question.engine === "sql") {
-      return {
-        question_id: question.id,
-        question_title: question.title || question.id,
-        prompt: question.prompt,
-        topic: question.topic,
-        expected_approach: question.expected_approach,
-        evaluator_context: question.evaluator_context,
-        schema_ref: question.schema_ref,
-        submitted_query: answer.value || "",
-        status: "submitted",
-        run_count: answer.runs,
-        submit_count: answer.submissions + 1,
-        execution_ms: answer.sqlExecutionMs,
-        sql_result_summary: resultSummary,
-      };
-    }
-
-    if (question.engine === "mcq") {
-      const selected = answer.selectedOptions || [];
-      const correct = question.correct_options || [];
-      const isCorrect = sameStringSet(selected, correct);
-      return {
-        student_id: "local-browser-attempt",
-        total_questions: 1,
-        correct_count: isCorrect ? 1 : 0,
-        deterministic_score: isCorrect ? 100 : 0,
-        answers: [
-          {
-            question_id: question.id,
-            question_title: question.title || question.id,
-            topic: question.topic || "general",
-            options: question.options || [],
-            selected_options: selected,
-            correct_options: correct,
-            explanation: question.explanation,
-            misconception_mapping: question.misconception_mapping,
-            is_correct: isCorrect,
-            answer_change_count: 0,
-            time_spent_seconds: 0,
-          },
-        ],
-        tab_events: tabEvents,
-      };
-    }
-
-    return {
-      question_id: question.id,
-      question_title: question.title || question.id,
-      prompt: question.prompt,
-      topic: question.topic,
-      difficulty: question.difficulty,
-      expected_approach: question.expected_approach,
-      evaluator_context: question.evaluator_context,
-      language: answer.language,
-      submitted_code: answer.value || "",
-      status: "submitted",
-      run_count: answer.runs,
-      submit_count: answer.submissions + 1,
-      compiler_result_summary: resultSummary,
-      open_test_cases: question.open_test_cases || [],
-      hidden_test_cases: question.section === "DSA" ? question.hidden_test_cases || [] : [],
-      all_doc_test_cases: question.test_cases || [],
-    };
-  }
-
-  async function evaluateSubmittedAnswer(question: AssessmentQuestion, answer: AnswerState, resultSummary: string) {
-    const section = evaluationEndpointForQuestion(question);
-    const endpoint = `/api/evaluations/${section}`;
-    const input = buildEvaluationInput(question, answer, resultSummary);
-    const requestedAt = new Date().toISOString();
-
-    setAiEvaluationDebugByQuestion((current) => ({
-      ...current,
-      [question.id]: { requestedAt, endpoint, input },
-    }));
-
-    try {
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(input),
-      });
-      const payload = (await response.json().catch(() => null)) as unknown;
-      if (!response.ok) {
-        const message =
-          payload && typeof payload === "object" && "message" in payload
-            ? String((payload as { message?: unknown }).message)
-            : `AI evaluation failed with status ${response.status}`;
-        throw new Error(message);
-      }
-
-      setAiEvaluationDebugByQuestion((current) => ({
-        ...current,
-        [question.id]: { requestedAt, endpoint, input, output: payload },
-      }));
-    } catch (error) {
-      setAiEvaluationDebugByQuestion((current) => ({
-        ...current,
-        [question.id]: {
-          requestedAt,
-          endpoint,
-          input,
-          error: error instanceof Error ? error.message : "AI evaluation failed.",
-        },
-      }));
-    }
-  }
-
   function changeQuestion(questionId: string) {
     const targetQuestion = questions.find((question) => question.id === questionId);
     if (!targetQuestion) return;
@@ -844,6 +1061,63 @@ export function AssessmentShell({
     });
   }
 
+  async function persistDsaSubmission(
+    nextAnswer: AnswerState,
+    structuredTestResults: TestResultsOutput | null,
+  ) {
+    if (activeQuestion.section !== "DSA" || activeQuestion.engine !== "code") {
+      return;
+    }
+
+    const calculationOutput = buildDsaCalculationOutput(
+      activeQuestion,
+      nextAnswer,
+      structuredTestResults,
+    );
+    if (!calculationOutput) return;
+
+    const {
+      data: { session },
+    } = await authClient.auth.getSession();
+    const response = await fetch("/api/assessment/dsa/submit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        attempt_id: persistedAttemptId,
+        assessment_id: assessmentInstanceId || assessmentBank.assessment.id,
+        question_id: activeQuestion.id,
+        started_at: localStorage.getItem(`${storageKey}:startedAt`) || new Date().toISOString(),
+        submitted_at: new Date().toISOString(),
+        duration_minutes: assessmentBank.assessment.duration_minutes,
+        submission_mode: "manual",
+        answer: {
+          value: nextAnswer.value,
+          language: nextAnswer.language,
+          selectedOptions: nextAnswer.selectedOptions,
+          marked: nextAnswer.marked,
+          runs: nextAnswer.runs,
+          submissions: nextAnswer.submissions,
+          status: nextAnswer.status,
+          testResults: structuredTestResults,
+          test_results: structuredTestResults,
+        },
+        dsa_output: calculationOutput,
+        test_results: structuredTestResults,
+        access_token: session?.access_token || null,
+      }),
+    });
+    const payload = (await response.json().catch(() => null)) as { attempt_id?: string; message?: string } | null;
+
+    if (!response.ok) {
+      throw new Error(payload?.message || `DSA persistence failed with status ${response.status}`);
+    }
+
+    if (payload?.attempt_id) {
+      setPersistedAttemptId(payload.attempt_id);
+      localStorage.setItem(`${storageKey}:attemptId`, payload.attempt_id);
+    }
+  }
+
   async function executeCode(action: "run" | "submit") {
     if (isExecuting || isIntegrityLocked) return;
 
@@ -866,10 +1140,6 @@ export function AssessmentShell({
         source_code: activeAnswer.value,
         run_type: action,
       };
-      if (action === "submit") {
-        recordSubmittedInput(activeQuestion.id, endpoint, requestBody);
-      }
-
       const response = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -907,6 +1177,10 @@ export function AssessmentShell({
       if (parsedTestResults && parsedTestResults.test_results?.length > 0) {
         // Animate test results one by one
         setTestResults(parsedTestResults);
+        setTemporaryScorePreviewByQuestion((current) => ({
+          ...current,
+          [activeQuestion.id]: buildTemporaryScorePreview(activeQuestion, activeAnswer, parsedTestResults),
+        }));
         const total = parsedTestResults.test_results.length;
         for (let i = 0; i < total; i++) {
           setAnimatingTestIndex(i);
@@ -914,22 +1188,35 @@ export function AssessmentShell({
         }
         setAnimatingTestIndex(-1);
 
-        const passed = parsedTestResults.passed;
-        const totalTests = parsedTestResults.total;
-        const resultMessage = `Test results: ${passed}/${totalTests} passed (${Math.round((passed / totalTests) * 100)}%)`;
-        updateActiveAnswer({
-          runs: action === "run" ? activeAnswer.runs + 1 : activeAnswer.runs,
-          submissions: action === "submit" ? activeAnswer.submissions + 1 : activeAnswer.submissions,
+        const resultMessage = "Code submission completed. Review the temporary score preview below.";
+        const nextRuns = action === "run" ? activeAnswer.runs + 1 : activeAnswer.runs;
+        const nextSubmissions = action === "submit" ? activeAnswer.submissions + 1 : activeAnswer.submissions;
+        const nextAnswer: AnswerState = {
+          ...activeAnswer,
+          runs: nextRuns,
+          submissions: nextSubmissions,
           status: action === "submit" ? "submitted" : "ran",
           resultMessage,
-        });
+          testResults: parsedTestResults,
+        };
         if (action === "submit") {
-          void evaluateSubmittedAnswer(activeQuestion, activeAnswer, resultMessage);
+          try {
+            await persistDsaSubmission(nextAnswer, parsedTestResults);
+          } catch (persistError) {
+            console.warn("Failed to persist DSA question output", persistError);
+          }
         }
+        updateActiveAnswer({
+          ...nextAnswer,
+        });
       } else {
         if (visibleFallback) {
           setTestResults(visibleFallback);
         }
+        setTemporaryScorePreviewByQuestion((current) => ({
+          ...current,
+          [activeQuestion.id]: buildTemporaryScorePreview(activeQuestion, activeAnswer, visibleFallback),
+        }));
         // No structured results - fall back to raw output display
         const resultLines = [
           isError ? `Compiler status: ${status}` : `Compiler status: ${status || "Completed"}`,
@@ -940,27 +1227,40 @@ export function AssessmentShell({
         ].filter(Boolean);
 
         const resultMessage = resultLines.join("\n\n") || "Compiler completed with no output.";
-        updateActiveAnswer({
-          runs: action === "run" ? activeAnswer.runs + 1 : activeAnswer.runs,
-          submissions: action === "submit" ? activeAnswer.submissions + 1 : activeAnswer.submissions,
+        const nextRuns = action === "run" ? activeAnswer.runs + 1 : activeAnswer.runs;
+        const nextSubmissions = action === "submit" ? activeAnswer.submissions + 1 : activeAnswer.submissions;
+        const nextAnswer: AnswerState = {
+          ...activeAnswer,
+          runs: nextRuns,
+          submissions: nextSubmissions,
           status: action === "submit" ? "submitted" : "ran",
           resultMessage,
-        });
+          testResults: parsedTestResults || visibleFallback,
+        };
         if (action === "submit") {
-          void evaluateSubmittedAnswer(activeQuestion, activeAnswer, resultMessage);
+          try {
+            await persistDsaSubmission(nextAnswer, parsedTestResults || visibleFallback);
+          } catch (persistError) {
+            console.warn("Failed to persist DSA question output", persistError);
+          }
         }
+        updateActiveAnswer({
+          ...nextAnswer,
+        });
       }
     } catch (error) {
       const resultMessage = error instanceof Error ? error.message : "Compiler request failed.";
+      setTemporaryScorePreviewByQuestion((current) => ({
+        ...current,
+        [activeQuestion.id]: buildTemporaryScorePreview(activeQuestion, activeAnswer, visibleFallback),
+      }));
       updateActiveAnswer({
         runs: action === "run" ? activeAnswer.runs + 1 : activeAnswer.runs,
         submissions: action === "submit" ? activeAnswer.submissions + 1 : activeAnswer.submissions,
         status: action === "submit" ? "submitted" : "ran",
         resultMessage,
+        testResults: visibleFallback,
       });
-      if (action === "submit") {
-        void evaluateSubmittedAnswer(activeQuestion, activeAnswer, resultMessage);
-      }
     } finally {
       setIsExecuting(false);
     }
@@ -985,10 +1285,6 @@ export function AssessmentShell({
         query: activeAnswer.value,
         mode: action === "submit" ? "hidden" : "visible",
       };
-      if (action === "submit") {
-        recordSubmittedInput(activeQuestion.id, endpoint, requestBody);
-      }
-
       const response = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1001,13 +1297,13 @@ export function AssessmentShell({
       }
 
       setSqlResult(payload);
+      setTemporaryScorePreviewByQuestion((current) => ({
+        ...current,
+        [activeQuestion.id]: buildTemporaryScorePreview(activeQuestion, activeAnswer, null),
+      }));
       const resultMessage = payload?.error
         ? `SQL error:\n${payload.error}`
         : `SQL completed. Rows: ${payload?.row_count ?? 0}. Execution: ${payload?.execution_ms ?? 0} ms.`;
-      const answerForEvaluation = {
-        ...activeAnswer,
-        sqlExecutionMs: typeof payload?.execution_ms === "number" ? payload.execution_ms : activeAnswer.sqlExecutionMs,
-      };
       updateActiveAnswer({
         runs: action === "run" ? activeAnswer.runs + 1 : activeAnswer.runs,
         submissions: action === "submit" ? activeAnswer.submissions + 1 : activeAnswer.submissions,
@@ -1015,11 +1311,12 @@ export function AssessmentShell({
         sqlExecutionMs: typeof payload?.execution_ms === "number" ? payload.execution_ms : null,
         resultMessage,
       });
-      if (action === "submit") {
-        void evaluateSubmittedAnswer(activeQuestion, answerForEvaluation, resultMessage);
-      }
     } catch (error) {
       setSqlResult(null);
+      setTemporaryScorePreviewByQuestion((current) => ({
+        ...current,
+        [activeQuestion.id]: buildTemporaryScorePreview(activeQuestion, activeAnswer, null),
+      }));
       const resultMessage = error instanceof Error ? error.message : "SQL request failed.";
       updateActiveAnswer({
         runs: action === "run" ? activeAnswer.runs + 1 : activeAnswer.runs,
@@ -1027,9 +1324,6 @@ export function AssessmentShell({
         status: action === "submit" ? "submitted" : "ran",
         resultMessage,
       });
-      if (action === "submit") {
-        void evaluateSubmittedAnswer(activeQuestion, activeAnswer, resultMessage);
-      }
     } finally {
       setIsExecuting(false);
     }
@@ -1060,8 +1354,12 @@ export function AssessmentShell({
     updateActiveAnswer({
       runs: activeAnswer.runs + 1,
       status: "ran",
-      resultMessage: "MCQ answer saved locally. Final MCQ scoring will run during assessment submission.",
+      resultMessage: "MCQ answer saved locally. Review the temporary score preview below.",
     });
+    setTemporaryScorePreviewByQuestion((current) => ({
+      ...current,
+      [activeQuestion.id]: buildTemporaryScorePreview(activeQuestion, activeAnswer, null),
+    }));
     setActiveTab("results");
     scrollToResults();
   }
@@ -1088,19 +1386,23 @@ export function AssessmentShell({
       return;
     }
 
-    recordSubmittedInput(activeQuestion.id, "local-mcq-submit", {
-      attempt_id: "local-browser-attempt",
-      question_id: activeQuestion.id,
-      selected_options: activeAnswer.selectedOptions,
-      run_type: "submit",
-    });
-    const resultMessage = "Question submitted. Hidden results remain private until final evaluation.";
+    setTemporaryScorePreviewByQuestion((current) => ({
+      ...current,
+      [activeQuestion.id]: buildTemporaryScorePreview(activeQuestion, activeAnswer, null),
+    }));
+    const resultMessage = "Question submitted. Review the temporary score preview below.";
     updateActiveAnswer({
       submissions: activeAnswer.submissions + 1,
       status: "submitted",
       resultMessage,
     });
-    void evaluateSubmittedAnswer(activeQuestion, activeAnswer, resultMessage);
+
+    const nextQuestion = questions[activeIndex + 1];
+    if (nextQuestion) {
+      changeQuestion(nextQuestion.id);
+      return;
+    }
+
     setActiveTab("results");
     scrollToResults();
   }
@@ -1109,7 +1411,7 @@ export function AssessmentShell({
     localStorage.setItem(
       storageKey,
       JSON.stringify({
-        answers,
+        answers: sanitizeAnswersForStorage(answers),
         activeQuestionId,
         startedAt: localStorage.getItem(`${storageKey}:startedAt`) || new Date().toISOString(),
         activeSection,
@@ -1120,6 +1422,18 @@ export function AssessmentShell({
     );
     setLastSavedAt(new Date());
   }, [activeQuestionId, activeSection, answers, cameraEvents, storageKey, tabEvents]);
+
+  useEffect(() => {
+    if (!hasHydrated) return;
+
+    const attemptIdKey = `${storageKey}:attemptId`;
+    if (persistedAttemptId) {
+      localStorage.setItem(attemptIdKey, persistedAttemptId);
+      return;
+    }
+
+    localStorage.removeItem(attemptIdKey);
+  }, [hasHydrated, persistedAttemptId, storageKey]);
 
   const submitAssessment = useCallback(async (
     submissionMode: "manual" | "auto" = "manual",
@@ -1132,9 +1446,14 @@ export function AssessmentShell({
     saveNow();
     setIsFinalizing(true);
     const integrityPayload = integrityViolationOverride || integrityViolation;
+    const answersForSubmission = sanitizeAnswersForStorage(answers);
 
     try {
+      const {
+        data: { session },
+      } = await authClient.auth.getSession();
       const submissionBody = {
+        attempt_id: persistedAttemptId,
         assessment_id: assessmentInstanceId || assessmentBank.assessment.id,
         started_at: localStorage.getItem(`${storageKey}:startedAt`) || new Date().toISOString(),
         submitted_at: new Date().toISOString(),
@@ -1146,7 +1465,8 @@ export function AssessmentShell({
         integrity_source: integrityPayload?.source || null,
         integrity_message: integrityPayload?.message || null,
         integrity_event_count: integrityPayload?.eventCount || null,
-        answers,
+        access_token: session?.access_token || null,
+        answers: answersForSubmission,
       };
       const response = await fetch("/api/assessment/finalize", {
         method: "POST",
@@ -1156,44 +1476,46 @@ export function AssessmentShell({
       const payload = (await response.json().catch(() => null)) as { attempt_id?: string; message?: string; statusCode?: number } | null;
 
       if (!response.ok) {
-        // 409 Conflict means the attempt already exists in the database - redirect to report
         if (response.status === 409) {
-          throw new Error("already completed or disqualified");
+          localStorage.removeItem(storageKey);
+          localStorage.removeItem(`${storageKey}:startedAt`);
+          localStorage.removeItem(`${storageKey}:attemptId`);
+          setPersistedAttemptId(null);
+          router.replace("/assessment/report?mode=auto");
+          router.refresh();
+          return;
         }
         throw new Error(payload?.message || `Final submission failed with status ${response.status}`);
       }
 
       if (payload?.attempt_id) {
-        localStorage.setItem(`assessment-finalize:${payload.attempt_id}`, JSON.stringify(submissionBody));
+        setPersistedAttemptId(payload.attempt_id);
+        localStorage.setItem(`${storageKey}:attemptId`, payload.attempt_id);
       }
       localStorage.removeItem(storageKey);
       localStorage.removeItem(`${storageKey}:startedAt`);
-      if (typeof window === "undefined" || window.location.hostname !== "localhost") {
-        const reportPath = payload?.attempt_id
-          ? `/assessment/report?attemptId=${encodeURIComponent(payload.attempt_id)}&mode=${submissionMode}`
-          : `/assessment/report?mode=${submissionMode}`;
-        router.replace(reportPath);
-        router.refresh();
-      }
+      const finalAttemptId = payload?.attempt_id || persistedAttemptId;
+      localStorage.removeItem(`${storageKey}:attemptId`);
+      setPersistedAttemptId(null);
+      const reportPath = finalAttemptId
+        ? `/assessment/report?attemptId=${encodeURIComponent(finalAttemptId)}&mode=${submissionMode}`
+        : `/assessment/report?mode=${submissionMode}`;
+      router.replace(reportPath);
+      router.refresh();
     } catch (error) {
-      const message = error instanceof Error ? error.message : "";
-      
-      // If integrity was violated or the backend confirms completion/disqualification,
-      // force redirect to report and clear local state
-      // 409 Conflict or integrity violation: attempt already exists in DB or was disqualified
-      if (integrityPayload || message.toLowerCase().includes("already completed or disqualified") || message.toLowerCase().includes("conflict")) {
+      if (integrityPayload) {
         localStorage.removeItem(storageKey);
         localStorage.removeItem(`${storageKey}:startedAt`);
-        if (typeof window === "undefined" || window.location.hostname !== "localhost") {
-          router.replace("/assessment/report?mode=auto");
-          router.refresh();
-        }
+        localStorage.removeItem(`${storageKey}:attemptId`);
+        setPersistedAttemptId(null);
+        router.replace("/assessment/report?mode=auto");
+        router.refresh();
         return;
       }
       
       // For non-integrity errors, show the error on the results panel
       updateActiveAnswer({
-        resultMessage: message || "Final assessment submission failed.",
+        resultMessage: error instanceof Error ? error.message : "Final assessment submission failed.",
       });
       setActiveTab("results");
     } finally {
@@ -1204,6 +1526,7 @@ export function AssessmentShell({
     assessmentBank.assessment.duration_minutes,
     assessmentBank.assessment.id,
     assessmentInstanceId,
+    authClient.auth,
     cameraEvents,
     isExecuting,
     isFinalizing,
@@ -1266,7 +1589,7 @@ export function AssessmentShell({
   }, [cameraStream]);
 
   useEffect(() => {
-    if (!hasHydrated || !canRunAssessment || !tabSecurity.enabled) return;
+    if (localProctoringDisabled || !hasHydrated || !canRunAssessment || !tabSecurity.enabled) return;
 
     function onVisibilityChange() {
       if (isFinalizing || autoSubmitStartedRef.current) return;
@@ -1287,13 +1610,11 @@ export function AssessmentShell({
 
       pendingTabWarningRef.current = null;
       const reachedLimit = violationCount >= tabSecurity.maxEvents;
-      if (typeof window === "undefined" || window.location.hostname !== "localhost") {
-        window.alert(
-          reachedLimit
-            ? `Warning ${violationCount}/${tabSecurity.maxEvents}: Switching tabs or windows has disqualified this attempt.`
-            : `Warning ${violationCount}/${tabSecurity.maxEvents}: Switching tabs or windows was detected. Do not do it again or you will be disqualified.`,
-        );
-      }
+      window.alert(
+        reachedLimit
+          ? `Warning ${violationCount}/${tabSecurity.maxEvents}: Switching tabs or windows has disqualified this attempt.`
+          : `Warning ${violationCount}/${tabSecurity.maxEvents}: Switching tabs or windows was detected. Do not do it again or you will be disqualified.`,
+      );
 
       if (reachedLimit && tabSecurity.autoSubmitOnMax) {
         disqualifyAssessment(
@@ -1311,6 +1632,31 @@ export function AssessmentShell({
       window.removeEventListener("focus", onVisibilityChange);
     };
   }, [buildIntegrityMessage, canRunAssessment, disqualifyAssessment, hasHydrated, isFinalizing, tabSecurity.autoSubmitOnMax, tabSecurity.enabled, tabSecurity.maxEvents]);
+
+  useEffect(() => {
+    if (localProctoringDisabled) return;
+
+    function onBeforeUnload(event: BeforeUnloadEvent) {
+      if (isFinalizing || autoSubmitStartedRef.current || isIntegrityLocked) return;
+      event.preventDefault();
+      event.returnValue = "Reloading this assessment will disqualify your attempt.";
+    }
+
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [isFinalizing, isIntegrityLocked]);
+
+  useEffect(() => {
+    if (localProctoringDisabled) return;
+    if (!hasHydrated || navigationType !== "reload") return;
+    if (isFinalizing || autoSubmitStartedRef.current || isIntegrityLocked) return;
+
+    disqualifyAssessment(
+      "tab_switch",
+      1,
+      "You reloaded the assessment page. Reloading the page disqualifies this attempt.",
+    );
+  }, [disqualifyAssessment, hasHydrated, isFinalizing, isIntegrityLocked, navigationType]);
 
   if (cameraSecurity.enabled && !cameraStream) {
     return (
@@ -1339,7 +1685,7 @@ export function AssessmentShell({
             {isRequestingCamera ? "Requesting camera..." : "Turn On Camera"}
           </button>
           <p className="mt-4 text-xs leading-5 text-slate-500">
-            The camera feed is monitored live in the browser. Video recording is not enabled.
+            The camera feed is monitored live in the browser. Video recording is going on.
           </p>
         </section>
       </main>
@@ -1377,7 +1723,7 @@ export function AssessmentShell({
           </div>
         </div>
       ) : null}
-      {integrityViolation && typeof window !== "undefined" && window.location.hostname !== "localhost" ? (
+      {integrityViolation ? (
         <div className="fixed inset-0 z-[60] grid place-items-center bg-slate-950/85 px-4 text-white">
           <section className="w-full max-w-xl rounded-[12px] border border-red-300 bg-slate-950 p-6 shadow-2xl">
             <div className="inline-flex h-12 w-12 items-center justify-center rounded-[10px] bg-red-500/15 text-red-300">
@@ -1657,31 +2003,186 @@ export function AssessmentShell({
                   }
                 />
               ) : null}
-              {activeSubmittedInputDebug ? (
-                <div className="rounded-[10px] border border-amber-700/50 bg-amber-950/30 p-3 text-sm leading-6 text-amber-50">
-                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-amber-200">
-                    <span>Temporary Submitted Input</span>
-                    <span>{activeSubmittedInputDebug.submittedAt}</span>
+              {process.env.NODE_ENV !== "production" && activeTemporaryScorePreview ? (
+                <div className="rounded-[10px] border border-emerald-700/40 bg-emerald-950/20 p-3 text-sm leading-6 text-emerald-50">
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-emerald-200">
+                    <span>{activeTemporaryScorePreview.label}</span>
+                    <span>
+                      {new Date(activeTemporaryScorePreview.updatedAt).toLocaleTimeString([], {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </span>
                   </div>
-                  <pre className="max-h-80 overflow-auto whitespace-pre-wrap font-mono text-xs leading-6 text-amber-50">
-                    {JSON.stringify(activeSubmittedInputDebug, null, 2)}
-                  </pre>
+                  <div className="flex flex-wrap items-end justify-between gap-3">
+                    <div>
+                      <div className="text-3xl font-semibold text-white">{activeTemporaryScorePreview.score}</div>
+                      <div className="mt-1 text-sm text-emerald-100">{activeTemporaryScorePreview.detail}</div>
+                    </div>
+                    <div className="max-w-xl text-xs leading-5 text-emerald-100/80">{activeTemporaryScorePreview.note}</div>
+                  </div>
                 </div>
               ) : null}
-              {activeAiEvaluationDebug ? (
-                <div className="rounded-[10px] border border-sky-700/50 bg-sky-950/30 p-3 text-sm leading-6 text-sky-50">
+              {process.env.NODE_ENV !== "production" && activeDsaCalculationOutput ? (
+                <div className="rounded-[10px] border border-sky-700/40 bg-sky-950/20 p-3 text-sm leading-6 text-sky-50">
                   <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-sky-200">
-                    <span>AI Evaluation Output</span>
-                    <span>{activeAiEvaluationDebug.requestedAt}</span>
+                    <span>DSA calculated output</span>
+                    <span>
+                      {new Date(activeDsaCalculationOutput.updatedAt).toLocaleTimeString([], {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </span>
                   </div>
-                  {activeAiEvaluationDebug.error ? (
-                    <p className="mb-3 rounded-[8px] border border-red-500/40 bg-red-950/40 px-3 py-2 text-xs text-red-100">
-                      {activeAiEvaluationDebug.error}
-                    </p>
-                  ) : null}
-                  <pre className="max-h-96 overflow-auto whitespace-pre-wrap font-mono text-xs leading-6 text-sky-50">
-                    {JSON.stringify(activeAiEvaluationDebug.output ?? { status: "AI evaluation is running..." }, null, 2)}
-                  </pre>
+                  <div className="grid gap-3 lg:grid-cols-[minmax(160px,220px)_1fr]">
+                    <div>
+                      <div className="text-3xl font-semibold text-white">{activeDsaCalculationOutput.score}</div>
+                      <div className="mt-1 text-sm text-sky-100">{activeDsaCalculationOutput.totalTestsPassed} test cases passed</div>
+                      <div className="mt-2 text-xs leading-5 text-sky-100/80">{activeDsaCalculationOutput.note}</div>
+                    </div>
+                    <div className="grid gap-3">
+                      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                        {[
+                          { label: "Correctness score", value: activeDsaCalculationOutput.correctnessScore },
+                          { label: "Open test score", value: activeDsaCalculationOutput.openTestCaseScore },
+                          { label: "Hidden test score", value: activeDsaCalculationOutput.hiddenTestCaseScore },
+                          { label: "Expected code score", value: activeDsaCalculationOutput.expectedCodeScore },
+                          { label: "Approach score", value: activeDsaCalculationOutput.approachScore },
+                          { label: "Time complexity score", value: activeDsaCalculationOutput.timeComplexityScore },
+                          { label: "Space complexity score", value: activeDsaCalculationOutput.spaceComplexityScore },
+                          { label: "Edge case score", value: activeDsaCalculationOutput.edgeCaseScore },
+                          { label: "Overall question score", value: activeDsaCalculationOutput.overallQuestionScore },
+                        ].map((item) => (
+                          <div key={item.label} className="rounded-[8px] border border-sky-700/30 bg-slate-950/40 p-3">
+                            <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-200">{item.label}</div>
+                            <div className="mt-1 text-sm text-white">{typeof item.value === "number" ? `${item.value}%` : item.value}</div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="rounded-[8px] border border-sky-700/30 bg-slate-950/40 p-3">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-200">Expected time complexity</div>
+                          <div className="mt-1 text-sm text-white">{activeDsaCalculationOutput.expectedTimeComplexity}</div>
+                          <div className="mt-1 text-xs text-sky-100/70">
+                            Rank {activeDsaCalculationOutput.expectedTimeComplexityRank}
+                            {typeof activeDsaCalculationOutput.studentTimeComplexityRank === "number"
+                              ? `, student rank ${activeDsaCalculationOutput.studentTimeComplexityRank}, gap ${activeDsaCalculationOutput.timeComplexityRankGap}`
+                              : ""}
+                          </div>
+                          <div className="mt-2 text-xs text-sky-100/90">
+                            Calculated time complexity:{" "}
+                            {complexityRankLabelLocal(activeDsaCalculationOutput.studentTimeComplexityRank)}
+                          </div>
+                        </div>
+                        <div className="rounded-[8px] border border-sky-700/30 bg-slate-950/40 p-3">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-200">Expected space complexity</div>
+                          <div className="mt-1 text-sm text-white">{activeDsaCalculationOutput.expectedSpaceComplexity}</div>
+                          <div className="mt-1 text-xs text-sky-100/70">
+                            Rank {activeDsaCalculationOutput.expectedSpaceComplexityRank}
+                            {typeof activeDsaCalculationOutput.studentSpaceComplexityRank === "number"
+                              ? `, student rank ${activeDsaCalculationOutput.studentSpaceComplexityRank}, gap ${activeDsaCalculationOutput.spaceComplexityRankGap}`
+                              : ""}
+                          </div>
+                          <div className="mt-2 text-xs text-sky-100/90">
+                            Calculated space complexity:{" "}
+                            {complexityRankLabelLocal(activeDsaCalculationOutput.studentSpaceComplexityRank)}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="rounded-[8px] border border-sky-700/30 bg-slate-950/40 p-3">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-200">Open tests passed</div>
+                          <div className="mt-1 text-sm text-white">{activeDsaCalculationOutput.openTestsPassed}</div>
+                        </div>
+                        <div className="rounded-[8px] border border-sky-700/30 bg-slate-950/40 p-3">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-200">Hidden tests passed</div>
+                          <div className="mt-1 text-sm text-white">{activeDsaCalculationOutput.hiddenTestsPassed}</div>
+                        </div>
+                      </div>
+
+                      <div className="rounded-[8px] border border-sky-700/30 bg-slate-950/40 p-3">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-200">Matched expected code</div>
+                        <div className="mt-1 flex flex-wrap gap-2">
+                          {activeDsaCalculationOutput.matchedExpectedCode.length ? (
+                            activeDsaCalculationOutput.matchedExpectedCode.map((item) => (
+                              <span key={item} className="rounded-full border border-sky-700/40 bg-sky-900/40 px-2 py-0.5 text-xs text-sky-50">
+                                {item}
+                              </span>
+                            ))
+                          ) : (
+                            <span className="text-sm text-sky-100/80">None matched</span>
+                          )}
+                        </div>
+                        <div className="mt-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-200">Missing expected code</div>
+                        <div className="mt-1 flex flex-wrap gap-2">
+                          {activeDsaCalculationOutput.missingExpectedCode.length ? (
+                            activeDsaCalculationOutput.missingExpectedCode.map((item) => (
+                              <span key={item} className="rounded-full border border-rose-700/40 bg-rose-900/30 px-2 py-0.5 text-xs text-rose-50">
+                                {item}
+                              </span>
+                            ))
+                          ) : (
+                            <span className="text-sm text-sky-100/80">None missing</span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="rounded-[8px] border border-sky-700/30 bg-slate-950/40 p-3">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-200">Expected approach</div>
+                        <div className="mt-1 flex flex-wrap gap-2">
+                          {activeDsaCalculationOutput.expectedApproach.length ? (
+                            activeDsaCalculationOutput.expectedApproach.map((item) => (
+                              <span key={item} className="rounded-full border border-sky-700/40 bg-sky-900/40 px-2 py-0.5 text-xs text-sky-50">
+                                {item}
+                              </span>
+                            ))
+                          ) : (
+                            <span className="text-sm text-sky-100/80">Not configured</span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="rounded-[8px] border border-sky-700/30 bg-slate-950/40 p-3">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-200">Expected code markers</div>
+                        <div className="mt-1 flex flex-wrap gap-2">
+                          {activeDsaCalculationOutput.expectedCode.length ? (
+                            activeDsaCalculationOutput.expectedCode.map((item) => (
+                              <span key={item} className="rounded-full border border-sky-700/40 bg-sky-900/40 px-2 py-0.5 text-xs text-sky-50">
+                                {item}
+                              </span>
+                            ))
+                          ) : (
+                            <span className="text-sm text-sky-100/80">Not configured</span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="rounded-[8px] border border-sky-700/30 bg-slate-950/40 p-3">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-200">Failed case analysis</div>
+                          <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-sky-50">
+                            {activeDsaCalculationOutput.failedCaseAnalysis.length ? (
+                              activeDsaCalculationOutput.failedCaseAnalysis.map((item) => <li key={item}>{item}</li>)
+                            ) : (
+                              <li>Not available</li>
+                            )}
+                          </ul>
+                        </div>
+                        <div className="rounded-[8px] border border-sky-700/30 bg-slate-950/40 p-3">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-200">Missed edge cases</div>
+                          <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-sky-50">
+                            {activeDsaCalculationOutput.missedEdgeCases.length ? (
+                              activeDsaCalculationOutput.missedEdgeCases.map((item) => <li key={item}>{item}</li>)
+                            ) : (
+                              <li>Not available</li>
+                            )}
+                          </ul>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               ) : null}
             </div>
@@ -1855,7 +2356,7 @@ function QuestionNavigator({
 
 function QuestionPrompt({ question, visible }: { question: AssessmentQuestion; visible: boolean }) {
   return (
-    <article className={`${visible ? "block" : "hidden"} min-h-0 overflow-auto rounded-[14px] border border-slate-200 bg-white p-4 shadow-sm lg:block sm:p-5`}>
+    <article className={`${visible ? "block" : "hidden"} min-h-0 overflow-auto rounded-[14px] border border-slate-200 bg-white p-4 shadow-sm lg:block lg:h-fit lg:self-start sm:p-5`}>
       <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-100 pb-3">
         <div>
           <p className="text-xs font-bold uppercase tracking-[0.16em] text-emerald-800">Problem Brief</p>
@@ -2141,7 +2642,7 @@ function AnswerPanel({
 }) {
   if (question.engine === "mcq") {
     return (
-        <section className={`${visible ? "block" : "hidden"} self-start overflow-auto rounded-[14px] border border-slate-200 bg-white p-4 shadow-sm lg:block sm:p-5`}>
+      <section className={`${visible ? "block" : "hidden"} self-start overflow-auto rounded-[14px] border border-slate-200 bg-white p-4 shadow-sm lg:block lg:h-fit lg:max-h-none sm:p-5`}>
         <div className="mb-4 border-b border-slate-100 pb-3">
           <p className="text-xs font-bold uppercase tracking-[0.16em] text-emerald-800">Answer Console</p>
           <p className="mt-1 text-xs text-slate-500">Select the best option for this scenario.</p>
@@ -2172,7 +2673,7 @@ function AnswerPanel({
         >
           {languageOptions.map((language) => (
             <option key={language.id} value={language.id}>
-              {language.label}
+              {getLanguageDisplayLabel(language)}
             </option>
           ))}
         </select>

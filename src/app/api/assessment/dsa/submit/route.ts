@@ -25,10 +25,11 @@ export async function POST(request: NextRequest) {
   if (!user) {
     return NextResponse.json({ message: "Not authenticated" }, { status: 401 });
   }
+
   const submissionBody = { ...(body as Record<string, unknown>) };
   delete submissionBody.access_token;
 
-  const response = await fetch(`${backendBaseUrl()}/assessment/finalize`, {
+  const response = await fetch(`${backendBaseUrl()}/assessment/dsa/submit`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -48,7 +49,7 @@ export async function POST(request: NextRequest) {
   if (response instanceof NextResponse) return response;
 
   const payload = await response.json().catch(() => ({
-    message: `Assessment finalization failed with status ${response.status}`,
+    message: `DSA persistence failed with status ${response.status}`,
   }));
 
   return NextResponse.json(payload, { status: response.status });

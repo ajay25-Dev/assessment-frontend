@@ -58,7 +58,7 @@ export default async function AssessmentTestPage({ searchParams }: PageProps) {
     }) || null;
 
   const redirectAttemptId = terminalAttempt?.id || null;
-  if (redirectAttemptId && process.env.NODE_ENV === "production") {
+  if (redirectAttemptId) {
     redirect(`/assessment/report?attemptId=${encodeURIComponent(redirectAttemptId)}`);
   }
 

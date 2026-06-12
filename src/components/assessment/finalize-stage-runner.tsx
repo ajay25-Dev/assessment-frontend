@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { supabaseBrowser } from "@/lib/supabase-browser";
 
 const stages = ["DSA", "SQL", "OOPs", "MCQ", "DASHBOARD"] as const;
 
@@ -14,6 +15,10 @@ export function FinalizeStageRunner({ attemptId }: { attemptId: string }) {
       if (!rawPayload) return;
 
       try {
+        const supabase = supabaseBrowser();
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
         const payload = JSON.parse(rawPayload) as Record<string, unknown>;
 
         for (const stage of stages) {
@@ -24,7 +29,10 @@ export function FinalizeStageRunner({ attemptId }: { attemptId: string }) {
             {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(payload),
+              body: JSON.stringify({
+                ...payload,
+                access_token: session?.access_token || null,
+              }),
             },
           );
 

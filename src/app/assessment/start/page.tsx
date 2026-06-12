@@ -41,7 +41,7 @@ const sections = [
 
 const dsaRules = [
   "All 4 DSA questions are mandatory.",
-  "Each DSA question has 5 open and 10 hidden test cases.",
+  "Each DSA question includes visible test cases and evaluation feedback.",
   "Strict execution time and memory limits apply.",
   "Run and submission activity is tracked.",
   "Code versions, submissions, and time taken per problem are tracked.",
@@ -109,17 +109,18 @@ export default async function AssessmentStartPage({ searchParams }: PageProps) {
       return assessmentId ? row.client_metadata?.source_assessment_id === assessmentId : true;
     }) || null;
 
-  const isLocalhost = process.env.NODE_ENV !== "production";
-  const existingAttemptId = isLocalhost ? null : terminalAttempt?.id || null;
-  const isDisqualified = isLocalhost
-    ? false
-    : terminalAttempt?.status === "disqualified" ||
-      terminalAttempt?.client_metadata?.integrity_status === "disqualified";
-  const hasCompletedAssessment = isLocalhost ? false : Boolean(existingAttemptId);
+  const existingAttemptId = terminalAttempt?.id || null;
+  if (existingAttemptId) {
+    redirect(`/assessment/report?attemptId=${encodeURIComponent(existingAttemptId)}`);
+  }
+
+  const isDisqualified =
+    terminalAttempt?.status === "disqualified" ||
+    terminalAttempt?.client_metadata?.integrity_status === "disqualified";
+  const hasCompletedAssessment = Boolean(existingAttemptId);
   const primaryCtaHref = assessmentId
     ? `/assessment/test?assessmentId=${assessmentId}`
     : "/assessment/test";
-  const primaryCtaLabel = hasCompletedAssessment ? (isDisqualified ? "Disqualified" : "Submitted") : "Enter Assessment";
   const lockedActionHref = existingAttemptId
     ? `/assessment/report?attemptId=${encodeURIComponent(existingAttemptId)}`
     : "/dashboard";
@@ -222,7 +223,7 @@ export default async function AssessmentStartPage({ searchParams }: PageProps) {
             <div className="mt-5 grid gap-3 sm:grid-cols-3">
               {[
                 ["4 Mandatory Problems", "Graphs, shortest paths, hashing, versioning, sliding window"],
-                ["Open + Hidden Tests", "Visible confidence plus unseen robustness"],
+                ["Open Tests", "Visible confidence and validation coverage"],
                 ["Compiler Tracking", "Runs, submissions, timing, and output quality"],
               ].map(([title, purpose]) => (
                 <div key={title} className="rounded-[8px] bg-slate-50 p-4">

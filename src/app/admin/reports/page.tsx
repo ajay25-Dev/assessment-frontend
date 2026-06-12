@@ -2,17 +2,13 @@ import {
   AlertTriangle,
   BadgeCheck,
   BarChart3,
-  BookOpen,
-  Building2,
   CircleAlert,
-  Code2,
-  Database,
   Filter,
   GraduationCap,
-  ShieldAlert,
-  Wrench,
+  Building2,
 } from "lucide-react";
 import Link from "next/link";
+import { adminUi } from "@/lib/admin/ui";
 import { requireAdmin } from "@/lib/admin/supabase-admin";
 
 export const dynamic = "force-dynamic";
@@ -22,6 +18,7 @@ type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 type ReportRow = {
   id: string;
   student_id: string | null;
+  attempt_id: string | null;
   assessment_title: string | null;
   marks_score: number | null;
   capability_score: number | null;
@@ -75,6 +72,7 @@ type FilteredReport = ReportRow & {
 };
 
 type ReadinessBucket = "Ready" | "Training Needed" | "Failed";
+type RiskFilter = "All" | "Low" | "Medium" | "High";
 
 function asText(value: string | string[] | undefined) {
   if (Array.isArray(value)) return value[0] || "";
@@ -112,13 +110,6 @@ function normalizeRisk(value: string | null | undefined) {
   return "Low";
 }
 
-function normalizeCompilation(value: string | null | undefined) {
-  const normalized = String(value || "").trim().toLowerCase();
-  if (normalized.includes("fail")) return "Failed";
-  if (normalized.includes("warn")) return "Warnings";
-  return "Clean";
-}
-
 function normalizeBucket(value: string | null | undefined, label: string | null | undefined): ReadinessBucket {
   const bucket = String(value || "").trim().toLowerCase();
   if (bucket === "ready") return "Ready";
@@ -134,24 +125,33 @@ function normalizeBucket(value: string | null | undefined, label: string | null 
   return "Ready";
 }
 
-function riskClasses(value: string | null | undefined) {
-  const risk = normalizeRisk(value);
-  if (risk === "High") return "border-red-200 bg-red-50 text-red-800";
-  if (risk === "Medium") return "border-amber-200 bg-amber-50 text-amber-800";
-  return "border-emerald-200 bg-emerald-50 text-emerald-800";
-}
-
 function readinessClasses(value: ReadinessBucket) {
   if (value === "Failed") return "border-red-200 bg-red-50 text-red-800";
   if (value === "Training Needed") return "border-amber-200 bg-amber-50 text-amber-800";
   return "border-emerald-200 bg-emerald-50 text-emerald-800";
 }
 
-function sectionIcon(section: string) {
-  if (section === "DSA") return Code2;
-  if (section === "SQL") return Database;
-  if (section === "OOPs") return Wrench;
-  return BookOpen;
+function riskBadgeClasses(value: string | null | undefined) {
+  const risk = normalizeRisk(value);
+  if (risk === "High") return "border-red-200 bg-red-50 text-red-800";
+  if (risk === "Medium") return "border-amber-200 bg-amber-50 text-amber-800";
+  return "border-emerald-200 bg-emerald-50 text-emerald-800";
+}
+
+function combinedRisk(report: { brute_force_risk: string | null; hardcoding_risk: string | null }): RiskFilter {
+  const bruteForce = normalizeRisk(report.brute_force_risk);
+  const hardcoding = normalizeRisk(report.hardcoding_risk);
+  if (bruteForce === "High" || hardcoding === "High") return "High";
+  if (bruteForce === "Medium" || hardcoding === "Medium") return "Medium";
+  return "Low";
+}
+
+function buildStudentReportHref(report: { student_id: string | null; attempt_id: string | null }) {
+  if (report.student_id && report.attempt_id) {
+    return `/admin/reports/students/${report.student_id}/attempts/${report.attempt_id}`;
+  }
+  if (report.student_id) return `/admin/reports/students/${report.student_id}`;
+  return "/admin/reports/students";
 }
 
 export default async function AdminReportsPage({
@@ -162,10 +162,16 @@ export default async function AdminReportsPage({
   const params = await searchParams;
   const { supabase } = await requireAdmin();
 
+  const queryFilter = asText(params.q).toLowerCase();
   const assessmentFilter = asText(params.assessment);
   const collegeFilter = asText(params.college);
   const batchFilter = asText(params.batch);
   const readinessFilter = asText(params.readiness);
+  const riskFilterRaw = asText(params.risk);
+  const riskFilter: RiskFilter =
+    riskFilterRaw === "Low" || riskFilterRaw === "Medium" || riskFilterRaw === "High"
+      ? riskFilterRaw
+      : "All";
   const fromFilter = asText(params.from);
   const toFilter = asText(params.to);
 
@@ -182,6 +188,7 @@ export default async function AdminReportsPage({
         [
           "id",
           "student_id",
+          "attempt_id",
           "assessment_title",
           "marks_score",
           "capability_score",
@@ -249,14 +256,21 @@ export default async function AdminReportsPage({
 
   const filteredReports = enrichedReports.filter((report) => {
     const bucket = normalizeBucket(report.readiness_bucket, report.readiness_label);
+    const risk = combinedRisk(report);
     const createdAt = report.created_at ? new Date(report.created_at) : null;
     const fromDate = fromFilter ? new Date(`${fromFilter}T00:00:00`) : null;
     const toDate = toFilter ? new Date(`${toFilter}T23:59:59`) : null;
+    const query = queryFilter.trim();
 
+    if (query) {
+      const haystack = `${report.student_name} ${report.student_email} ${report.assessment_title || ""} ${report.batch_name} ${report.college_name}`.toLowerCase();
+      if (!haystack.includes(query)) return false;
+    }
     if (assessmentFilter && report.assessment_title !== assessmentFilter) return false;
     if (collegeFilter && report.college_name !== collegeFilter) return false;
     if (batchFilter && report.batch_name !== batchFilter) return false;
     if (readinessFilter && bucket !== readinessFilter) return false;
+    if (riskFilter !== "All" && risk !== riskFilter) return false;
     if (fromDate && createdAt && createdAt < fromDate) return false;
     if (toDate && createdAt && createdAt > toDate) return false;
     return true;
@@ -268,151 +282,110 @@ export default async function AdminReportsPage({
     Failed: 0,
   };
 
-  const weakestSectionCounts = new Map<string, number>();
   for (const report of filteredReports) {
     const bucket = normalizeBucket(report.readiness_bucket, report.readiness_label);
     readinessCounts[bucket] += 1;
-    const weakest = report.weakest_section || "Unknown";
-    weakestSectionCounts.set(weakest, (weakestSectionCounts.get(weakest) || 0) + 1);
   }
-
-  const weakestSections = [...weakestSectionCounts.entries()]
-    .sort((left, right) => right[1] - left[1])
-    .slice(0, 4);
 
   const assessmentOptions = [...new Set(enrichedReports.map((report) => report.assessment_title || "Untitled assessment"))].sort();
   const collegeOptions = [...new Set(enrichedReports.map((report) => report.college_name).filter((item) => item && item !== "-"))].sort();
   const batchOptions = [...new Set(enrichedReports.map((report) => report.batch_name).filter((item) => item && item !== "-"))].sort();
 
+  const readyCount = filteredReports.filter((report) => normalizeBucket(report.readiness_bucket, report.readiness_label) === "Ready").length;
+  const trainingNeededCount = filteredReports.filter((report) => normalizeBucket(report.readiness_bucket, report.readiness_label) === "Training Needed").length;
+  const failedCount = filteredReports.filter((report) => normalizeBucket(report.readiness_bucket, report.readiness_label) === "Failed").length;
+  const activeFilterCount = [
+    queryFilter,
+    assessmentFilter,
+    collegeFilter,
+    batchFilter,
+    readinessFilter,
+    riskFilter !== "All" ? riskFilter : "",
+    fromFilter,
+    toFilter,
+  ].filter(Boolean).length;
+
   const statCards = [
-    { label: "Filtered Reports", value: filteredReports.length, icon: BarChart3, note: "Rows matching current filters" },
-    { label: "Avg Marks", value: average(filteredReports, "marks_score"), icon: GraduationCap, note: "Overall assessment output" },
-    { label: "Avg Capability", value: average(filteredReports, "capability_score"), icon: BadgeCheck, note: "Problem-solving strength" },
-    { label: "Avg Hidden Tests", value: average(filteredReports, "hidden_test_pass_rate"), icon: ShieldAlert, note: "Unseen-case reliability" },
-  ];
-
-  const healthCards = [
-    { label: "Ready", value: readinessCounts.Ready, tone: "border-emerald-200 bg-emerald-50 text-emerald-800" },
-    { label: "Training Needed", value: readinessCounts["Training Needed"], tone: "border-amber-200 bg-amber-50 text-amber-800" },
-    { label: "Failed", value: readinessCounts.Failed, tone: "border-red-200 bg-red-50 text-red-800" },
     {
-      label: "Compilation Failed",
-      value: filteredReports.filter((report) => normalizeCompilation(report.compilation_behaviour) === "Failed").length,
-      tone: "border-red-200 bg-red-50 text-red-800",
+      label: "Total Reports",
+      value: filteredReports.length,
+      icon: BarChart3,
+      tone: "border-slate-200 bg-white text-slate-950",
+      detail: "All submissions currently in view.",
     },
     {
-      label: "High Brute-force",
-      value: filteredReports.filter((report) => normalizeRisk(report.brute_force_risk) === "High").length,
-      tone: "border-amber-200 bg-amber-50 text-amber-800",
+      label: "Training Needed",
+      value: trainingNeededCount,
+      icon: CircleAlert,
+      tone: "border-amber-200 bg-amber-50 text-amber-950 ring-1 ring-amber-100",
+      detail: "Students who need targeted support.",
     },
     {
-      label: "High Hardcoding",
-      value: filteredReports.filter((report) => normalizeRisk(report.hardcoding_risk) === "High").length,
-      tone: "border-amber-200 bg-amber-50 text-amber-800",
+      label: "Failed",
+      value: failedCount,
+      icon: AlertTriangle,
+      tone: "border-red-200 bg-red-50 text-red-950 ring-1 ring-red-100",
+      detail: "Students who failed the selected scope.",
     },
-  ];
-
-  const sectionAverages = [
-    { label: "DSA", value: average(filteredReports, "dsa_score") },
-    { label: "SQL", value: average(filteredReports, "sql_score") },
-    { label: "OOPs", value: average(filteredReports, "oops_score") },
-    { label: "MCQ", value: average(filteredReports, "mcq_score") },
-  ];
+    {
+      label: "Ready",
+      value: readyCount,
+      icon: BadgeCheck,
+      tone: "border-emerald-200 bg-emerald-50 text-emerald-950",
+      detail: "Students who are ready for the next level.",
+    },
+    {
+      label: "Avg Marks",
+      value: average(filteredReports, "marks_score"),
+      icon: GraduationCap,
+      tone: "border-emerald-200 bg-emerald-50 text-emerald-950",
+      detail: "Weighted result for the selected scope.",
+    },
+    {
+      label: "Avg Problem Solving",
+      value: average(filteredReports, "capability_score"),
+      icon: BadgeCheck,
+      tone: "border-teal-200 bg-teal-50 text-teal-950",
+      detail: "Real problem-solving strength.",
+    },
+  ] as const;
 
   return (
     <div className="grid gap-6">
-      <section className="rounded-[8px] border border-slate-200 bg-white p-6 shadow-sm">
-        <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
-          <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.18em] text-emerald-800">
+      <section className={adminUi.workspaceCard}>
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="max-w-3xl">
+            <p className={adminUi.eyebrow}>
+              Teacher dashboard
+            </p>
+            <h2 className={`${adminUi.pageTitle} mt-2`}>
               Reports
-            </p>
-            <h2 className="mt-2 text-3xl font-semibold text-slate-950">Admin assessment analytics</h2>
-            <p className="mt-3 max-w-3xl leading-7 text-slate-600">
-              Review readiness distribution, section strength, integrity risk, and recent outcomes across all submitted assessments.
+            </h2>
+            <p className={`mt-3 ${adminUi.subtleText} sm:text-base`}>
+              Review student performance, identify risk, and open student profiles.
             </p>
           </div>
-          <div className="flex flex-col gap-3">
-            <Link
-              href="/admin/reports/students"
-              className="inline-flex items-center justify-center rounded-[8px] border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-900 hover:bg-emerald-100"
-            >
-              Student Drill-Down
-            </Link>
-            <div className="rounded-[8px] border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-              <div className="flex items-center gap-2 font-medium text-slate-900">
-                <Filter size={16} />
-                Active scope
-              </div>
-              <p className="mt-2">
-                {assessmentFilter || "All assessments"} | {collegeFilter || "All colleges"} | {batchFilter || "All batches"} | {readinessFilter || "All readiness buckets"}
-              </p>
-            </div>
-          </div>
+          <Link href="/admin/reports/students" className={adminUi.primaryButton}>
+            Student Drill-Down
+          </Link>
         </div>
       </section>
 
-      <section className="rounded-[8px] border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="mb-4">
-          <h3 className="font-semibold text-slate-950">Filters</h3>
-          <p className="mt-1 text-sm text-slate-600">Narrow the analytics view without leaving the admin workspace.</p>
-        </div>
-        <form className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
-          <select name="assessment" defaultValue={assessmentFilter} className="rounded-[8px] border border-slate-300 px-3 py-2 text-sm">
-            <option value="">All assessments</option>
-            {assessmentOptions.map((assessment) => (
-              <option key={assessment} value={assessment}>
-                {assessment}
-              </option>
-            ))}
-          </select>
-          <select name="college" defaultValue={collegeFilter} className="rounded-[8px] border border-slate-300 px-3 py-2 text-sm">
-            <option value="">All colleges</option>
-            {collegeOptions.map((college) => (
-              <option key={college} value={college}>
-                {college}
-              </option>
-            ))}
-          </select>
-          <select name="batch" defaultValue={batchFilter} className="rounded-[8px] border border-slate-300 px-3 py-2 text-sm">
-            <option value="">All batches</option>
-            {batchOptions.map((batch) => (
-              <option key={batch} value={batch}>
-                {batch}
-              </option>
-            ))}
-          </select>
-          <select name="readiness" defaultValue={readinessFilter} className="rounded-[8px] border border-slate-300 px-3 py-2 text-sm">
-            <option value="">All readiness buckets</option>
-            <option value="Ready">Ready</option>
-            <option value="Training Needed">Training Needed</option>
-            <option value="Failed">Failed</option>
-          </select>
-          <input name="from" type="date" defaultValue={fromFilter} className="rounded-[8px] border border-slate-300 px-3 py-2 text-sm" />
-          <input name="to" type="date" defaultValue={toFilter} className="rounded-[8px] border border-slate-300 px-3 py-2 text-sm" />
-          <div className="md:col-span-2 xl:col-span-6 flex flex-wrap gap-2">
-            <button className="rounded-[8px] bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800">
-              Apply Filters
-            </button>
-            <a href="/admin/reports" className="rounded-[8px] border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-              Clear
-            </a>
-          </div>
-        </form>
-      </section>
-
-      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <section className="grid auto-rows-fr gap-4 sm:grid-cols-2 xl:grid-cols-6">
         {statCards.map((item) => {
           const Icon = item.icon;
           return (
-            <article key={item.label} className="rounded-[8px] border border-slate-200 bg-white p-5 shadow-sm">
+            <article
+              key={item.label}
+              className={`h-full rounded-[20px] border p-5 shadow-[var(--shadow-card)] ${item.tone}`}
+            >
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <p className="text-sm font-medium text-slate-500">{item.label}</p>
-                  <p className="mt-2 text-3xl font-semibold text-slate-950">{item.value}</p>
-                  <p className="mt-2 text-xs text-slate-500">{item.note}</p>
+                  <p className={adminUi.eyebrow}>{item.label}</p>
+                  <p className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">{item.value}</p>
+                  <p className={`mt-2 ${adminUi.mutedText}`}>{item.detail}</p>
                 </div>
-                <span className="rounded-[8px] border border-emerald-200 bg-emerald-50 p-2 text-emerald-800">
+                <span className="rounded-[12px] border border-white/70 bg-white/70 p-2.5 text-slate-800 shadow-sm">
                   <Icon size={18} />
                 </span>
               </div>
@@ -421,138 +394,182 @@ export default async function AdminReportsPage({
         })}
       </section>
 
-      <section className="grid gap-4 xl:grid-cols-[1.1fr_1.1fr_1fr]">
-        <article className="rounded-[8px] border border-slate-200 bg-white p-5 shadow-sm">
-          <h3 className="font-semibold text-slate-950">Readiness Distribution</h3>
-          <div className="mt-5 grid gap-3">
-            {healthCards.slice(0, 3).map((item) => (
-              <div key={item.label} className={`flex items-center justify-between rounded-[8px] border px-3 py-3 text-sm font-semibold ${item.tone}`}>
-                <span>{item.label}</span>
-                <span>{item.value}</span>
-              </div>
-            ))}
+      <section className={adminUi.sectionCard}>
+        <div className="flex flex-col gap-3 border-b border-slate-100 pb-4 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <h3 className={adminUi.sectionTitle}>Search and filters</h3>
+            <p className={`mt-1 ${adminUi.subtleText}`}>Search students, narrow the list, and keep the report view focused.</p>
           </div>
-        </article>
+          <span className="inline-flex w-fit items-center gap-2 rounded-full border border-[var(--status-ready-border)] bg-[var(--status-ready-bg)] px-3 py-1.5 text-xs font-semibold text-[var(--status-ready-text)]">
+            <Filter size={14} />
+            {activeFilterCount} active filters
+          </span>
+        </div>
 
-        <article className="rounded-[8px] border border-slate-200 bg-white p-5 shadow-sm">
-          <h3 className="font-semibold text-slate-950">Risk Signals</h3>
-          <div className="mt-5 grid gap-3">
-            {healthCards.slice(3).map((item) => (
-              <div key={item.label} className={`flex items-center justify-between rounded-[8px] border px-3 py-3 text-sm font-semibold ${item.tone}`}>
-                <span>{item.label}</span>
-                <span>{item.value}</span>
-              </div>
+        <form className="mt-4 grid gap-3 xl:grid-cols-6">
+          <div className="relative xl:col-span-2">
+            <Filter size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              name="q"
+              defaultValue={queryFilter}
+              placeholder="Search student name or email"
+              className="w-full rounded-[12px] border border-[var(--color-border-strong)] bg-white py-2.5 pl-9 pr-3 text-sm outline-none transition focus:border-[var(--color-primary-300)] focus:ring-2 focus:ring-[var(--color-primary-100)]"
+            />
+          </div>
+          <select name="assessment" defaultValue={assessmentFilter} className="rounded-[12px] border border-[var(--color-border-strong)] bg-white px-3 py-2.5 text-sm outline-none transition focus:border-[var(--color-primary-300)] focus:ring-2 focus:ring-[var(--color-primary-100)]">
+            <option value="">All assessments</option>
+            {assessmentOptions.map((assessment) => (
+              <option key={assessment} value={assessment}>
+                {assessment}
+              </option>
             ))}
+          </select>
+          <select name="college" defaultValue={collegeFilter} className="rounded-[12px] border border-[var(--color-border-strong)] bg-white px-3 py-2.5 text-sm outline-none transition focus:border-[var(--color-primary-300)] focus:ring-2 focus:ring-[var(--color-primary-100)]">
+            <option value="">All colleges</option>
+            {collegeOptions.map((college) => (
+              <option key={college} value={college}>
+                {college}
+              </option>
+            ))}
+          </select>
+          <select name="batch" defaultValue={batchFilter} className="rounded-[12px] border border-[var(--color-border-strong)] bg-white px-3 py-2.5 text-sm outline-none transition focus:border-[var(--color-primary-300)] focus:ring-2 focus:ring-[var(--color-primary-100)]">
+            <option value="">All batches</option>
+            {batchOptions.map((batch) => (
+              <option key={batch} value={batch}>
+                {batch}
+              </option>
+            ))}
+          </select>
+          <select name="readiness" defaultValue={readinessFilter} className="rounded-[12px] border border-[var(--color-border-strong)] bg-white px-3 py-2.5 text-sm outline-none transition focus:border-[var(--color-primary-300)] focus:ring-2 focus:ring-[var(--color-primary-100)]">
+            <option value="">All readiness</option>
+            <option value="Ready">Ready</option>
+            <option value="Training Needed">Training Needed</option>
+            <option value="Failed">Failed</option>
+          </select>
+          <select name="risk" defaultValue={riskFilter} className="rounded-[12px] border border-[var(--color-border-strong)] bg-white px-3 py-2.5 text-sm outline-none transition focus:border-[var(--color-primary-300)] focus:ring-2 focus:ring-[var(--color-primary-100)]">
+            <option value="All">All risk levels</option>
+            <option value="Low">Low risk</option>
+            <option value="Medium">Medium risk</option>
+            <option value="High">High risk</option>
+          </select>
+          <input name="from" type="date" defaultValue={fromFilter} className="rounded-[12px] border border-[var(--color-border-strong)] bg-white px-3 py-2.5 text-sm outline-none transition focus:border-[var(--color-primary-300)] focus:ring-2 focus:ring-[var(--color-primary-100)]" />
+          <input name="to" type="date" defaultValue={toFilter} className="rounded-[12px] border border-[var(--color-border-strong)] bg-white px-3 py-2.5 text-sm outline-none transition focus:border-[var(--color-primary-300)] focus:ring-2 focus:ring-[var(--color-primary-100)]" />
+          <div className="flex flex-wrap gap-2 xl:col-span-6">
+            <button className={adminUi.primaryButton}>
+              Apply Filters
+            </button>
+            <Link href="/admin/reports" className={adminUi.secondaryButton}>
+              Clear
+            </Link>
           </div>
-        </article>
-
-        <article className="rounded-[8px] border border-slate-200 bg-white p-5 shadow-sm">
-          <h3 className="font-semibold text-slate-950">Weakest Sections</h3>
-          <div className="mt-5 grid gap-3">
-            {weakestSections.length > 0 ? (
-              weakestSections.map(([section, count]) => {
-                const Icon = sectionIcon(section);
-                return (
-                  <div key={section} className="flex items-center justify-between rounded-[8px] border border-slate-200 bg-slate-50 px-3 py-3 text-sm">
-                    <span className="flex items-center gap-2 font-medium text-slate-900">
-                      <Icon size={15} />
-                      {section}
-                    </span>
-                    <span className="font-semibold text-slate-700">{count}</span>
-                  </div>
-                );
-              })
-            ) : (
-              <p className="text-sm text-slate-500">No weakest-section data yet for the selected filters.</p>
-            )}
-          </div>
-        </article>
+        </form>
       </section>
 
-      <section className="grid gap-4 xl:grid-cols-[1.1fr_1.9fr]">
-        <article className="rounded-[8px] border border-slate-200 bg-white p-5 shadow-sm">
-          <h3 className="font-semibold text-slate-950">Section Averages</h3>
-          <div className="mt-5 grid gap-3">
-            {sectionAverages.map((item) => {
-              const Icon = sectionIcon(item.label);
-              return (
-                <div key={item.label} className="flex items-center justify-between rounded-[8px] border border-slate-200 bg-slate-50 px-3 py-3">
-                  <span className="flex items-center gap-2 text-sm font-medium text-slate-900">
-                    <Icon size={15} />
-                    {item.label}
-                  </span>
-                  <span className="text-lg font-semibold text-slate-950">{item.value}</span>
-                </div>
-              );
-            })}
-          </div>
-        </article>
-
-        <article className="rounded-[8px] border border-slate-200 bg-white p-5 shadow-sm">
+      <section className={adminUi.sectionCard}>
+        <div className="border-b border-[var(--color-border-subtle)] pb-4">
           <div className="flex items-center justify-between gap-4">
             <div>
-              <h3 className="font-semibold text-slate-950">Latest Submissions</h3>
-              <p className="mt-1 text-sm text-slate-600">Filtered report rows with readiness, risk, and training direction.</p>
+              <h3 className={adminUi.sectionTitle}>Latest Submissions</h3>
+              <p className={`mt-1 ${adminUi.subtleText}`}>Scan the latest assessments, risk signals, and next actions in one place.</p>
             </div>
-            <CircleAlert className="text-slate-400" size={18} />
+            <CircleAlert className="text-[var(--color-text-muted)]" size={18} />
           </div>
-          <div className="mt-5 overflow-x-auto">
-            <table className="w-full min-w-[1080px] text-left text-sm">
-              <thead className="bg-slate-50 text-slate-600">
+        </div>
+
+        <div className="hidden md:block">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[1120px] text-left text-sm">
+              <thead className="bg-[var(--color-bg-muted)] text-slate-600">
                 <tr>
+                  <th className="px-4 py-3 font-medium">#</th>
                   <th className="px-4 py-3 font-medium">Student</th>
                   <th className="px-4 py-3 font-medium">Assessment</th>
-                  <th className="px-4 py-3 font-medium">Batch</th>
-                  <th className="px-4 py-3 font-medium">Scores</th>
-                  <th className="px-4 py-3 font-medium">Readiness</th>
-                  <th className="px-4 py-3 font-medium">Weakest</th>
-                  <th className="px-4 py-3 font-medium">Training Priority</th>
+                  <th className="px-4 py-3 font-medium">Performance</th>
+                  <th className="px-4 py-3 font-medium">Readiness / Risk</th>
                   <th className="px-4 py-3 font-medium">Submitted</th>
+                  <th className="px-4 py-3 font-medium">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
-                {filteredReports.slice(0, 50).map((report) => {
+              <tbody className="divide-y divide-[var(--color-border-subtle)]">
+                {filteredReports.slice(0, 50).map((report, index) => {
                   const bucket = normalizeBucket(report.readiness_bucket, report.readiness_label);
+                  const risk = combinedRisk(report);
+                  const profileHref = report.student_id ? `/admin/reports/students/${report.student_id}` : "/admin/reports/students";
+                  const reportHref = buildStudentReportHref(report);
+
                   return (
-                    <tr key={report.id} className="align-top">
+                    <tr key={report.id} className="align-top transition hover:bg-[var(--color-bg-muted)]">
+                      <td className="px-4 py-4 text-slate-500">{index + 1}</td>
                       <td className="px-4 py-4">
-                        <p className="font-medium text-slate-950">{report.student_name}</p>
-                        <p className="mt-1 text-xs text-slate-500">{report.student_email}</p>
-                        <p className="mt-1 text-xs text-slate-500">{report.college_name}</p>
+                        <Link href={profileHref} className="block rounded-[14px] p-2 -m-2 transition hover:bg-white">
+                          <div className="space-y-1.5">
+                            <p className="font-semibold text-slate-950">{report.student_name}</p>
+                            <p className="text-xs text-slate-500">{report.student_email}</p>
+                            <div className="flex flex-wrap gap-2 text-xs text-slate-500">
+                              <span>{report.college_name}</span>
+                              <span>{report.batch_name}</span>
+                            </div>
+                            <p className="text-xs font-semibold text-[var(--color-primary-800)]">Open Profile</p>
+                          </div>
+                        </Link>
                       </td>
-                      <td className="px-4 py-4 text-slate-700">{report.assessment_title || "Untitled assessment"}</td>
-                      <td className="px-4 py-4 text-slate-700">{report.batch_name}</td>
                       <td className="px-4 py-4">
-                        <div className="grid gap-1 text-xs text-slate-600">
-                          <span className="font-semibold text-slate-950">Marks {score(report.marks_score)} | Capability {score(report.capability_score)}</span>
-                          <span>DSA {score(report.dsa_score)} | SQL {score(report.sql_score)} | OOPs {score(report.oops_score)} | MCQ {score(report.mcq_score)}</span>
-                          <span>Hidden tests {score(report.hidden_test_pass_rate)}</span>
+                        <div className="space-y-1.5">
+                          <p className="font-semibold text-slate-950">{report.assessment_title || "Untitled assessment"}</p>
+                          <p className="text-xs text-slate-500">Batch: {report.batch_name}</p>
+                          <p className="text-xs text-slate-500">College: {report.college_name}</p>
+                        </div>
+                      </td>
+                      <td className="px-4 py-4">
+                        <div className="grid gap-2 text-xs text-slate-600">
+                          <div className="flex flex-wrap gap-2">
+                            <span className="rounded-full border border-[var(--color-border-subtle)] bg-white px-2.5 py-1 font-semibold text-slate-800">Marks {score(report.marks_score)}</span>
+                            <span className="rounded-full border border-[var(--color-border-subtle)] bg-white px-2.5 py-1 font-semibold text-slate-800">Problem Solving {score(report.capability_score)}</span>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            <span className="rounded-full border border-[var(--color-border-subtle)] bg-[var(--color-bg-muted)] px-2.5 py-1">DSA {score(report.dsa_score)}</span>
+                            <span className="rounded-full border border-[var(--color-border-subtle)] bg-[var(--color-bg-muted)] px-2.5 py-1">SQL {score(report.sql_score)}</span>
+                            <span className="rounded-full border border-[var(--color-border-subtle)] bg-[var(--color-bg-muted)] px-2.5 py-1">OOPs {score(report.oops_score)}</span>
+                            <span className="rounded-full border border-[var(--color-border-subtle)] bg-[var(--color-bg-muted)] px-2.5 py-1">MCQ {score(report.mcq_score)}</span>
+                          </div>
                         </div>
                       </td>
                       <td className="px-4 py-4">
                         <div className="grid gap-2">
-                          <span className={`inline-flex w-fit rounded-[8px] border px-2.5 py-1 text-xs font-semibold ${readinessClasses(bucket)}`}>
-                            {bucket}
+                          <div className="flex flex-wrap gap-2">
+                            <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${readinessClasses(bucket)}`}>{bucket}</span>
+                            <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-semibold ${riskBadgeClasses(report.brute_force_risk)}`}>
+                              <AlertTriangle size={13} />
+                              BF {normalizeRisk(report.brute_force_risk)}
+                            </span>
+                            <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-semibold ${riskBadgeClasses(report.hardcoding_risk)}`}>
+                              <Building2 size={13} />
+                              HC {normalizeRisk(report.hardcoding_risk)}
+                            </span>
+                          </div>
+                          <span className={`inline-flex w-fit rounded-full border px-2.5 py-1 text-xs font-semibold ${risk === "High" ? "border-red-200 bg-red-50 text-red-800" : risk === "Medium" ? "border-amber-200 bg-amber-50 text-amber-800" : "border-emerald-200 bg-emerald-50 text-emerald-800"}`}>
+                            Combined risk {risk}
                           </span>
-                          <span className={`inline-flex w-fit items-center gap-1 rounded-[8px] border px-2.5 py-1 text-xs font-semibold ${riskClasses(report.brute_force_risk)}`}>
-                            <AlertTriangle size={13} />
-                            BF {normalizeRisk(report.brute_force_risk)}
-                          </span>
-                          <span className={`inline-flex w-fit items-center gap-1 rounded-[8px] border px-2.5 py-1 text-xs font-semibold ${riskClasses(report.hardcoding_risk)}`}>
-                            <Building2 size={13} />
-                            HC {normalizeRisk(report.hardcoding_risk)}
-                          </span>
+                          <p className="text-sm leading-6 text-slate-700">{report.training_priority || "-"}</p>
                         </div>
                       </td>
-                      <td className="px-4 py-4 text-slate-700">{report.weakest_section || "-"}</td>
-                      <td className="max-w-xs px-4 py-4 leading-6 text-slate-700">{report.training_priority || "-"}</td>
                       <td className="px-4 py-4 text-slate-600">{formatDate(report.created_at)}</td>
+                      <td className="px-4 py-4">
+                        <div className="flex flex-wrap gap-2">
+                          <Link href={profileHref} className={adminUi.secondaryButton}>
+                            Open Profile
+                          </Link>
+                          <Link href={reportHref} target="_blank" rel="noopener noreferrer" className={adminUi.ghostButton}>
+                            View Report
+                          </Link>
+                        </div>
+                      </td>
                     </tr>
                   );
                 })}
                 {filteredReports.length === 0 ? (
                   <tr>
-                    <td className="px-4 py-8 text-center text-slate-500" colSpan={8}>
+                    <td className="px-4 py-8 text-center text-slate-500" colSpan={7}>
                       No submitted assessment reports match the current filters.
                     </td>
                   </tr>
@@ -560,7 +577,88 @@ export default async function AdminReportsPage({
               </tbody>
             </table>
           </div>
-        </article>
+        </div>
+
+        <div className="grid gap-3 p-4 md:hidden">
+          {filteredReports.slice(0, 50).map((report, index) => {
+            const bucket = normalizeBucket(report.readiness_bucket, report.readiness_label);
+            const risk = combinedRisk(report);
+            const profileHref = report.student_id ? `/admin/reports/students/${report.student_id}` : "/admin/reports/students";
+            const reportHref = buildStudentReportHref(report);
+
+            return (
+              <article key={report.id} className="rounded-[18px] border border-slate-200 bg-slate-50 p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">#{index + 1}</p>
+                    <Link href={profileHref} className="block rounded-[12px] p-2 -m-2 transition hover:bg-white">
+                      <p className="truncate text-base font-semibold text-slate-950">{report.student_name}</p>
+                      <p className="mt-1 text-xs text-slate-500">{report.student_email}</p>
+                      <p className="mt-1 text-xs text-slate-500">{report.batch_name} · {report.college_name}</p>
+                      <p className="mt-2 text-xs font-semibold text-emerald-800">Student Profile</p>
+                    </Link>
+                  </div>
+                  <span className={`inline-flex shrink-0 rounded-full border px-2.5 py-1 text-xs font-semibold ${readinessClasses(bucket)}`}>
+                    {bucket}
+                  </span>
+                </div>
+
+                <div className="mt-4 grid gap-3">
+                  <div className="rounded-[14px] border border-slate-200 bg-white px-3 py-3">
+                    <p className="text-sm font-semibold text-slate-950">{report.assessment_title || "Untitled assessment"}</p>
+                    <p className="mt-1 text-xs text-slate-500">{formatDate(report.created_at)}</p>
+                  </div>
+
+                  <div className="grid gap-2 rounded-[14px] border border-slate-200 bg-white px-3 py-3 text-xs text-slate-600">
+                    <div className="flex flex-wrap gap-2">
+                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 font-semibold text-slate-800">Marks {score(report.marks_score)}</span>
+                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 font-semibold text-slate-800">Problem Solving {score(report.capability_score)}</span>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1">DSA {score(report.dsa_score)}</span>
+                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1">SQL {score(report.sql_score)}</span>
+                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1">OOPs {score(report.oops_score)}</span>
+                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1">MCQ {score(report.mcq_score)}</span>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-2 rounded-[14px] border border-slate-200 bg-white px-3 py-3">
+                    <div className="flex flex-wrap gap-2">
+                      <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${readinessClasses(bucket)}`}>{bucket}</span>
+                      <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-semibold ${riskBadgeClasses(report.brute_force_risk)}`}>
+                        <AlertTriangle size={13} />
+                        BF {normalizeRisk(report.brute_force_risk)}
+                      </span>
+                      <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-semibold ${riskBadgeClasses(report.hardcoding_risk)}`}>
+                        <Building2 size={13} />
+                        HC {normalizeRisk(report.hardcoding_risk)}
+                      </span>
+                    </div>
+                    <span className={`inline-flex w-fit rounded-full border px-2.5 py-1 text-xs font-semibold ${risk === "High" ? "border-red-200 bg-red-50 text-red-800" : risk === "Medium" ? "border-amber-200 bg-amber-50 text-amber-800" : "border-emerald-200 bg-emerald-50 text-emerald-800"}`}>
+                      Combined risk {risk}
+                    </span>
+                    <p className="text-sm leading-6 text-slate-700">{report.training_priority || "-"}</p>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    <Link href={profileHref} className="rounded-[12px] border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+                      Open Student Profile
+                    </Link>
+                    <Link href={reportHref} target="_blank" rel="noopener noreferrer" className="rounded-[12px] border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-900 hover:bg-emerald-100">
+                      View Report
+                    </Link>
+                  </div>
+                </div>
+              </article>
+            );
+          })}
+
+          {filteredReports.length === 0 ? (
+            <div className="rounded-[18px] border border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+              No submitted assessment reports match the current filters.
+            </div>
+          ) : null}
+        </div>
       </section>
     </div>
   );
