@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import { NavigationLoader } from "@/components/navigation-loader";
 import { AppToaster } from "@/components/app-toaster";
 import "./globals.css";
@@ -17,7 +18,9 @@ export default function RootLayout({
     <html lang="en" className="h-full antialiased">
       <body className="min-h-full flex flex-col">
         {children}
-        <NavigationLoader />
+        <Suspense fallback={null}>
+          <NavigationLoader />
+        </Suspense>
         <AppToaster />
       </body>
     </html>
