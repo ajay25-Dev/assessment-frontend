@@ -2094,7 +2094,7 @@ export function AssessmentShell({
                   }
                 />
               ) : null}
-              {process.env.NODE_ENV !== "production" && activeTemporaryScorePreview ? (
+              {activeTemporaryScorePreview ? (
                 <div className="rounded-[10px] border border-emerald-700/40 bg-emerald-950/20 p-3 text-sm leading-6 text-emerald-50">
                   <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-emerald-200">
                     <span>{activeTemporaryScorePreview.label}</span>
@@ -2114,7 +2114,7 @@ export function AssessmentShell({
                   </div>
                 </div>
               ) : null}
-              {process.env.NODE_ENV !== "production" && activeDsaCalculationOutput ? (
+              {activeDsaCalculationOutput ? (
                 <div className="rounded-[10px] border border-sky-700/40 bg-sky-950/20 p-3 text-sm leading-6 text-sky-50">
                   <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-sky-200">
                     <span>DSA calculated output</span>
