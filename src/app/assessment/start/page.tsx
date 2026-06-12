@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { redirect } from "next/navigation";
 import { AssessmentEntryGate } from "./assessment-entry-gate";
+import { AuthenticatedHeader } from "@/components/authenticated-header";
 import { supabaseService } from "@/lib/supabase-service";
 import { supabaseServer } from "@/lib/supabase-server";
 
@@ -41,7 +42,7 @@ const sections = [
 
 const dsaRules = [
   "All 4 DSA questions are mandatory.",
-  "Each DSA question has 5 open and 10 hidden test cases.",
+  "Each DSA question includes visible test cases and evaluation feedback.",
   "Strict execution time and memory limits apply.",
   "Run and submission activity is tracked.",
   "Code versions, submissions, and time taken per problem are tracked.",
@@ -109,17 +110,18 @@ export default async function AssessmentStartPage({ searchParams }: PageProps) {
       return assessmentId ? row.client_metadata?.source_assessment_id === assessmentId : true;
     }) || null;
 
-  const isLocalhost = process.env.NODE_ENV !== "production";
-  const existingAttemptId = isLocalhost ? null : terminalAttempt?.id || null;
-  const isDisqualified = isLocalhost
-    ? false
-    : terminalAttempt?.status === "disqualified" ||
-      terminalAttempt?.client_metadata?.integrity_status === "disqualified";
-  const hasCompletedAssessment = isLocalhost ? false : Boolean(existingAttemptId);
+  const existingAttemptId = terminalAttempt?.id || null;
+  if (existingAttemptId) {
+    redirect(`/assessment/report?attemptId=${encodeURIComponent(existingAttemptId)}`);
+  }
+
+  const isDisqualified =
+    terminalAttempt?.status === "disqualified" ||
+    terminalAttempt?.client_metadata?.integrity_status === "disqualified";
+  const hasCompletedAssessment = Boolean(existingAttemptId);
   const primaryCtaHref = assessmentId
     ? `/assessment/test?assessmentId=${assessmentId}`
     : "/assessment/test";
-  const primaryCtaLabel = hasCompletedAssessment ? (isDisqualified ? "Disqualified" : "Submitted") : "Enter Assessment";
   const lockedActionHref = existingAttemptId
     ? `/assessment/report?attemptId=${encodeURIComponent(existingAttemptId)}`
     : "/dashboard";
@@ -127,21 +129,11 @@ export default async function AssessmentStartPage({ searchParams }: PageProps) {
 
   return (
     <main className="min-h-dvh bg-[#f6f8f4]">
-      <div className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:px-8">
-          <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.18em] text-emerald-800">
-              Jora Assessment
-            </p>
-            <h1 className="mt-1 text-xl font-semibold text-slate-950">Assessment Welcome</h1>
-          </div>
-          <form action="/api/auth/signout" method="post">
-            <button className="rounded-[8px] border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50">
-              Sign out
-            </button>
-          </form>
-        </div>
-      </div>
+      <AuthenticatedHeader
+        eyebrow="Jora Assessment"
+        title="Assessment Welcome"
+        subtitle="Review the assessment structure, timings, and rules before entering the workspace."
+      />
 
       <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
         <section className="overflow-hidden rounded-[8px] border border-slate-200 bg-white shadow-sm">
@@ -222,7 +214,7 @@ export default async function AssessmentStartPage({ searchParams }: PageProps) {
             <div className="mt-5 grid gap-3 sm:grid-cols-3">
               {[
                 ["4 Mandatory Problems", "Graphs, shortest paths, hashing, versioning, sliding window"],
-                ["Open + Hidden Tests", "Visible confidence plus unseen robustness"],
+                ["Open Tests", "Visible confidence and validation coverage"],
                 ["Compiler Tracking", "Runs, submissions, timing, and output quality"],
               ].map(([title, purpose]) => (
                 <div key={title} className="rounded-[8px] bg-slate-50 p-4">

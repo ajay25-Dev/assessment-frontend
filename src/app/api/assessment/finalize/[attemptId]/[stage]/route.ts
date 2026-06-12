@@ -17,18 +17,22 @@ function backendBaseUrl() {
 export async function POST(request: NextRequest, { params }: RouteParams) {
   const { attemptId, stage } = await params;
   const supabase = await supabaseServer();
+  const body = await request.json().catch(() => null);
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return NextResponse.json({ message: "Invalid JSON body" }, { status: 400 });
+  }
+
+  const accessToken = typeof body.access_token === "string" && body.access_token.trim() ? body.access_token : null;
   const {
     data: { user },
-  } = await supabase.auth.getUser();
+  } = accessToken ? await supabase.auth.getUser(accessToken) : await supabase.auth.getUser();
 
   if (!user) {
     return NextResponse.json({ message: "Not authenticated" }, { status: 401 });
   }
 
-  const body = await request.json().catch(() => null);
-  if (!body || typeof body !== "object" || Array.isArray(body)) {
-    return NextResponse.json({ message: "Invalid JSON body" }, { status: 400 });
-  }
+  const submissionBody = { ...(body as Record<string, unknown>) };
+  delete submissionBody.access_token;
 
   const response = await fetch(
     `${backendBaseUrl()}/assessment/finalize/${encodeURIComponent(attemptId)}/${encodeURIComponent(stage)}`,
@@ -36,7 +40,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        ...body,
+        ...submissionBody,
         student_id: user.id,
         student_email: user.email,
       }),

@@ -22,7 +22,14 @@ import { useRouter } from "next/navigation";
 import { CodeEditor } from "@/components/editor/code-editor";
 import { McqPanel } from "@/components/mcq/mcq-panel";
 import { SqlResultGrid } from "@/components/sql/sql-result-grid";
-import { sectionOrder, type AssessmentBank, type AssessmentQuestion, type AssessmentSectionId } from "@/data/assessment-bank";
+import { supabaseBrowser } from "@/lib/supabase-browser";
+import {
+  getLanguageDisplayLabel,
+  sectionOrder,
+  type AssessmentBank,
+  type AssessmentQuestion,
+  type AssessmentSectionId,
+} from "@/data/assessment-bank";
 
 type AnswerState = {
   value: string;
@@ -193,6 +200,7 @@ export function AssessmentShell({
   studentId?: string;
 }) {
   const router = useRouter();
+  const authClient = useMemo(() => supabaseBrowser(), []);
   const questions = assessmentBank.questions;
   const storageKey = storageKeyForBank(assessmentBank, assessmentInstanceId, studentId);
   const [initialSnapshot] = useState(() => loadInitialSnapshot(assessmentBank, assessmentInstanceId, studentId));
@@ -524,6 +532,12 @@ export function AssessmentShell({
       status: "submitted",
       resultMessage: "Question submitted. Hidden results remain private until final evaluation.",
     });
+    const nextQuestion = questions[activeIndex + 1];
+    if (nextQuestion) {
+      changeQuestion(nextQuestion.id);
+      return;
+    }
+
     setActiveTab("results");
   }
 
@@ -548,12 +562,16 @@ export function AssessmentShell({
     setIsFinalizing(true);
 
     try {
+      const {
+        data: { session },
+      } = await authClient.auth.getSession();
       const submissionBody = {
         assessment_id: assessmentInstanceId || assessmentBank.assessment.id,
         started_at: localStorage.getItem(`${storageKey}:startedAt`) || new Date().toISOString(),
         submitted_at: new Date().toISOString(),
         duration_minutes: assessmentBank.assessment.duration_minutes,
         tab_events: tabEvents,
+        access_token: session?.access_token || null,
         answers,
       };
       const response = await fetch("/api/assessment/finalize", {
@@ -564,6 +582,13 @@ export function AssessmentShell({
       const payload = (await response.json().catch(() => null)) as { attempt_id?: string; message?: string } | null;
 
       if (!response.ok) {
+        if (response.status === 409) {
+          localStorage.removeItem(storageKey);
+          localStorage.removeItem(`${storageKey}:startedAt`);
+          router.replace("/assessment/report?mode=auto");
+          router.refresh();
+          return;
+        }
         throw new Error(payload?.message || `Final submission failed with status ${response.status}`);
       }
 
@@ -913,7 +938,7 @@ function QuestionNavigator({
 
 function QuestionPrompt({ question, visible }: { question: AssessmentQuestion; visible: boolean }) {
   return (
-    <article className={`${visible ? "block" : "hidden"} min-h-0 overflow-auto border-r border-slate-200 bg-white p-4 lg:block sm:p-5`}>
+    <article className={`${visible ? "block" : "hidden"} min-h-0 overflow-auto border-r border-slate-200 bg-white p-4 lg:block lg:h-fit lg:self-start sm:p-5`}>
       <div className="prose prose-slate max-w-none">
         <p className="whitespace-pre-line text-sm leading-7 text-slate-700">{question.prompt}</p>
       </div>
@@ -1180,7 +1205,7 @@ function AnswerPanel({
 }) {
   if (question.engine === "mcq") {
     return (
-      <section className={`${visible ? "block" : "hidden"} min-h-0 overflow-auto bg-[#f8faf9] p-4 lg:block sm:p-5`}>
+      <section className={`${visible ? "block" : "hidden"} min-h-0 overflow-auto bg-[#f8faf9] p-4 lg:block lg:h-fit lg:self-start sm:p-5`}>
         <McqPanel question={question} selected={answer.selectedOptions} onChange={onMcqChange} />
       </section>
     );
@@ -1201,7 +1226,7 @@ function AnswerPanel({
         >
           {languageOptions.map((language) => (
             <option key={language.id} value={language.id}>
-              {language.label}
+              {getLanguageDisplayLabel(language)}
             </option>
           ))}
         </select>

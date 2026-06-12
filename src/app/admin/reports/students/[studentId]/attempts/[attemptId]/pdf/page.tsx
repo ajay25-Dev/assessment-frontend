@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { PdfAutoPrint } from "@/components/admin/pdf-auto-print";
 import { StudentAttemptReport } from "@/components/admin/student-attempt-report";
 import {
   CodeRunRow,
@@ -15,7 +16,7 @@ export const dynamic = "force-dynamic";
 
 type Params = Promise<{ studentId: string; attemptId: string }>;
 
-export default async function AttemptReportCardPage({
+export default async function StudentAttemptReportPdfPage({
   params,
 }: {
   params: Params;
@@ -129,19 +130,25 @@ export default async function AttemptReportCardPage({
   if (!report) notFound();
 
   return (
-    <StudentAttemptReport
-      report={report}
-      profile={profile}
-      assignments={assignments}
-      batches={batches}
-      colleges={colleges}
-      questionAttempts={questionAttempts}
-      evaluations={evaluations}
-      codeRuns={codeRuns}
-      sqlRuns={sqlRuns}
-      mcqAnswers={mcqAnswers}
-      studentId={studentId}
-      attemptId={attemptId}
-    />
+    <main className="min-h-dvh bg-white px-4 py-6 text-slate-950 print:bg-white print:px-0 print:py-0">
+      <PdfAutoPrint />
+      <div className="mx-auto max-w-5xl">
+        <StudentAttemptReport
+          report={report}
+          profile={profile}
+          assignments={assignments}
+          batches={batches}
+          colleges={colleges}
+          questionAttempts={questionAttempts}
+          evaluations={evaluations}
+          codeRuns={codeRuns}
+          sqlRuns={sqlRuns}
+          mcqAnswers={mcqAnswers}
+          studentId={studentId}
+          attemptId={attemptId}
+          printMode
+        />
+      </div>
+    </main>
   );
 }

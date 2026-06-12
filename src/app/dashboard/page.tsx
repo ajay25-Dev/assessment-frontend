@@ -10,14 +10,14 @@ import {
   Database,
   Gauge,
   GraduationCap,
-  LogOut,
-  ShieldAlert,
   Target,
   TrendingUp,
   Wrench,
 } from "lucide-react";
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { AuthenticatedHeader } from "@/components/authenticated-header";
 import { supabaseService } from "@/lib/supabase-service";
 import { supabaseServer } from "@/lib/supabase-server";
 import { getAuthRole, normalizeRole } from "@/lib/user-role";
@@ -49,6 +49,7 @@ type StudentAssessmentReportRow = {
   assessment_title: string | null;
   marks_score: number | null;
   capability_score: number | null;
+  problem_solving_score: number | null;
   dsa_score: number | null;
   sql_score: number | null;
   oops_score: number | null;
@@ -71,6 +72,7 @@ type StudentAssessmentReportRow = {
   detailed_strengths: unknown;
   detailed_weaknesses: unknown;
   next_3_learning_actions: unknown;
+  report_json: unknown;
   created_at: string | null;
 };
 
@@ -83,11 +85,9 @@ type AvailableAssessment = {
   subjects: string[];
 };
 
-type AssessmentReportRow = {
-  assessment_id: string | null;
-  attempt_id: string | null;
-  report_json: { integrity?: { status?: string } } | null;
-  created_at: string | null;
+type SectionEvaluationRecord = {
+  section?: string;
+  output?: Record<string, unknown>;
 };
 
 type AssessmentAttemptRow = {
@@ -197,38 +197,73 @@ function asStringArray(value: unknown) {
   return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : [];
 }
 
+function asRecord(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function asSectionEvaluationArray(value: unknown) {
+  return Array.isArray(value)
+    ? value
+        .map((item) => {
+          const record = asRecord(item);
+          if (!record) return null;
+          return {
+            section: textValue(record.section),
+            output: asRecord(record.output) || undefined,
+          } satisfies SectionEvaluationRecord;
+        })
+        .filter(Boolean) as SectionEvaluationRecord[]
+    : [];
+}
+
+function numberValue(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.round(parsed) : 0;
+}
+
+function textValue(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
 function ScoreCard({
   label,
   value,
-  note,
   icon: Icon,
+  id,
+  details,
 }: {
   label: string;
   value: number;
-  note: string;
   icon: typeof Target;
+  id: string;
+  details: ReactNode;
 }) {
   const tone = toneForScore(value);
 
   return (
-    <article className="rounded-[8px] border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-sm font-medium text-slate-500">{label}</p>
-          <p className="mt-2 text-3xl font-semibold text-slate-950">{value}</p>
+    <details id={id} className="group rounded-[8px] border border-slate-200 bg-white shadow-sm open:border-emerald-200 open:ring-1 open:ring-emerald-100">
+      <summary className="list-none cursor-pointer p-5 outline-none">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-sm font-medium text-slate-500">{label}</p>
+            <p className="mt-2 text-3xl font-semibold text-slate-950">{value}</p>
+            <p className="mt-2 text-xs font-medium text-emerald-800">Click to see why</p>
+          </div>
+          <span className={`rounded-[8px] border p-2 ${toneClasses(tone)}`}>
+            <Icon size={18} />
+          </span>
         </div>
-        <span className={`rounded-[8px] border p-2 ${toneClasses(tone)}`}>
-          <Icon size={18} />
-        </span>
+        <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-100">
+          <div
+            className="h-full rounded-full bg-emerald-700"
+            style={{ width: `${Math.min(value, 100)}%` }}
+          />
+        </div>
+      </summary>
+      <div className="border-t border-slate-100 px-5 pb-5 pt-4 text-sm leading-7 text-slate-700">
+        {details}
       </div>
-      <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-100">
-        <div
-          className="h-full rounded-full bg-emerald-700"
-          style={{ width: `${Math.min(value, 100)}%` }}
-        />
-      </div>
-      <p className="mt-3 text-sm leading-6 text-slate-600">{note}</p>
-    </article>
+    </details>
   );
 }
 
@@ -322,27 +357,6 @@ function AvailableAssessments({ assessments }: { assessments: AvailableAssessmen
           </Link>
         </article>
       ))}
-    </div>
-  );
-}
-
-function DashboardTopBar() {
-  return (
-    <div className="border-b border-slate-200 bg-white">
-      <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:px-8">
-        <div>
-          <p className="text-sm font-semibold uppercase tracking-[0.18em] text-emerald-800">
-            Jora Assessment
-          </p>
-          <h1 className="mt-1 text-xl font-semibold text-slate-950">Student Dashboard</h1>
-        </div>
-        <form action="/api/auth/signout" method="post">
-          <button className="inline-flex h-10 items-center gap-2 rounded-[8px] border border-slate-300 bg-white px-3 text-sm font-medium text-slate-800 hover:bg-slate-50">
-            <LogOut size={16} />
-            Sign out
-          </button>
-        </form>
-      </div>
     </div>
   );
 }
@@ -525,6 +539,7 @@ export default async function DashboardPage() {
         "detailed_strengths",
         "detailed_weaknesses",
         "next_3_learning_actions",
+        "report_json",
         "created_at",
       ].join(","),
     )
@@ -548,56 +563,225 @@ export default async function DashboardPage() {
   const detailedStrengths = asStringArray(latestReport.detailed_strengths);
   const detailedWeaknesses = asStringArray(latestReport.detailed_weaknesses);
   const nextActions = asStringArray(latestReport.next_3_learning_actions);
+  const reportJson = asRecord(latestReport.report_json);
+  const dashboardEvaluation = asRecord(reportJson?.dashboard_evaluation);
+  const dashboardOutput = asRecord(dashboardEvaluation?.output);
+  const dashboardInput = asRecord(reportJson?.dashboard_input);
+  const sectionEvaluations = asSectionEvaluationArray(reportJson?.section_evaluations);
+  const dashboardWeights = asRecord(dashboardInput?.weights) || {
+    DSA: 40,
+    SQL: 20,
+    OOPs: 20,
+    MCQ: 20,
+  };
+  const dsaEvaluations = sectionEvaluations.filter((item) => textValue(item.section) === "DSA");
+  const sqlEvaluations = sectionEvaluations.filter((item) => textValue(item.section) === "SQL");
+  const oopsEvaluations = sectionEvaluations.filter((item) => textValue(item.section) === "OOPs");
+  const mcqEvaluations = sectionEvaluations.filter((item) => textValue(item.section) === "MCQ");
+  const dsaTimeComplexity = dsaEvaluations.map((item) => textValue(item.output?.likely_time_complexity)).find(Boolean) || "Unknown";
+  const dsaSpaceComplexity = dsaEvaluations.map((item) => textValue(item.output?.likely_space_complexity)).find(Boolean) || "Unknown";
+  const dsaTimeComplexityScore = dsaEvaluations.length
+    ? Math.round(dsaEvaluations.reduce((sum, item) => sum + numberValue(item.output?.time_complexity_score), 0) / dsaEvaluations.length)
+    : 0;
+  const dsaSpaceComplexityScore = dsaEvaluations.length
+    ? Math.round(dsaEvaluations.reduce((sum, item) => sum + numberValue(item.output?.space_complexity_score), 0) / dsaEvaluations.length)
+    : 0;
+  const dsaApproachScore = dsaEvaluations.length
+    ? Math.round(dsaEvaluations.reduce((sum, item) => sum + numberValue(item.output?.approach_score), 0) / dsaEvaluations.length)
+    : 0;
+  const dsaCodeQualityScore = dsaEvaluations.length
+    ? Math.round(dsaEvaluations.reduce((sum, item) => sum + numberValue(item.output?.code_quality_score), 0) / dsaEvaluations.length)
+    : 0;
+  const sqlEfficiencyScore = sqlEvaluations.length
+    ? Math.round(sqlEvaluations.reduce((sum, item) => sum + numberValue(item.output?.query_efficiency_score), 0) / sqlEvaluations.length)
+    : 0;
+  const oopsDesignScore = oopsEvaluations.length
+    ? Math.round(oopsEvaluations.reduce((sum, item) => sum + numberValue(item.output?.code_readability_score ?? item.output?.class_design_score), 0) / oopsEvaluations.length)
+    : 0;
+  const mcqTopicScore = mcqEvaluations.length
+    ? Math.round(mcqEvaluations.reduce((sum, item) => sum + numberValue(item.output?.overall_question_score), 0) / mcqEvaluations.length)
+    : 0;
+  const dashboardMarks = numberValue(dashboardOutput?.overall_marks_score);
+  const dashboardCapability = numberValue(dashboardOutput?.problem_solving_score ?? dashboardOutput?.capability_score);
+  const dashboardApproach = numberValue(dashboardOutput?.approach_score);
+  const dashboardComplexity = numberValue(dashboardOutput?.complexity_score);
+  const dashboardCodeQuality = numberValue(dashboardOutput?.code_quality_score);
+  const dashboardRuntime = textValue(dashboardOutput?.runtime_percentile) || "Unknown";
+  const weightedMarks = Math.round(
+    (clampScore(latestReport.dsa_score) * Number(dashboardWeights.DSA || 0) +
+      clampScore(latestReport.sql_score) * Number(dashboardWeights.SQL || 0) +
+      clampScore(latestReport.oops_score) * Number(dashboardWeights.OOPs || 0) +
+      clampScore(latestReport.mcq_score) * Number(dashboardWeights.MCQ || 0)) /
+      100,
+  );
 
   const scoreCards = [
     {
       label: "Marks Score",
       value: marksScore,
       icon: Target,
-      note: "Weighted assessment result",
+      id: "kpi-marks",
+      details: (
+        <div className="space-y-3">
+          <p>
+            This is the dashboard marks score. It comes from the evaluator output when available, and is cross-checked against the weighted section formula.
+          </p>
+          <ul className="space-y-2">
+            <li>Evaluator output: {dashboardMarks || marksScore}</li>
+            <li>Weighted section fallback: DSA {clampScore(latestReport.dsa_score)} x {Number(dashboardWeights.DSA || 0)}%, SQL {clampScore(latestReport.sql_score)} x {Number(dashboardWeights.SQL || 0)}%, OOPs {clampScore(latestReport.oops_score)} x {Number(dashboardWeights.OOPs || 0)}%, MCQ {clampScore(latestReport.mcq_score)} x {Number(dashboardWeights.MCQ || 0)}%</li>
+            <li>Weighted fallback result: {weightedMarks}</li>
+          </ul>
+        </div>
+      ),
     },
     {
-      label: "Capability Score",
-      value: clampScore(latestReport.capability_score),
+      label: "Problem Solving Score",
+      value: clampScore(latestReport.problem_solving_score ?? latestReport.capability_score),
       icon: GraduationCap,
-      note: "Concept and execution strength",
+      id: "kpi-capability",
+      details: (
+        <div className="space-y-3">
+          <p>
+            Problem solving is the real algorithmic score. It is higher when section performance and solution quality are stronger.
+          </p>
+          <ul className="space-y-2">
+            <li>Evaluator output: {dashboardCapability || clampScore(latestReport.problem_solving_score ?? latestReport.capability_score)}</li>
+            <li>Section support: DSA {clampScore(latestReport.dsa_score)}, SQL {clampScore(latestReport.sql_score)}, OOPs {clampScore(latestReport.oops_score)}, MCQ {clampScore(latestReport.mcq_score)}</li>
+            <li>Strongest / weakest: {latestReport.strongest_section || "-"} / {latestReport.weakest_section || "-"}</li>
+          </ul>
+        </div>
+      ),
     },
     {
       label: "Approach Score",
       value: clampScore(latestReport.approach_score),
       icon: Gauge,
-      note: "Planning and problem breakdown",
+      id: "kpi-approach",
+      details: (
+        <div className="space-y-3">
+          <p>Approach reflects whether the solution strategy and business logic are sound, not just whether the final answer is correct.</p>
+          <ul className="space-y-2">
+            <li>Evaluator output: {dashboardApproach || clampScore(latestReport.approach_score)}</li>
+            <li>DSA average approach score: {dsaApproachScore}</li>
+            <li>SQL section support: {sqlEvaluations.length} evaluated question(s)</li>
+            <li>OOPs section support: {oopsEvaluations.length} evaluated question(s)</li>
+          </ul>
+        </div>
+      ),
     },
     {
       label: "Complexity Score",
       value: clampScore(latestReport.complexity_score),
       icon: BarChart3,
-      note: "Time and space efficiency",
+      id: "kpi-complexity",
+      details: (
+        <div className="space-y-3">
+          <p>
+            Complexity is the efficiency signal. This is the card that should show time and space complexity evidence directly.
+          </p>
+          <ul className="space-y-2">
+            <li>Evaluator output: {dashboardComplexity || clampScore(latestReport.complexity_score)}</li>
+            <li>Time complexity: {dsaTimeComplexity} | score {dsaTimeComplexityScore}</li>
+            <li>Space complexity: {dsaSpaceComplexity} | score {dsaSpaceComplexityScore}</li>
+            <li>SQL efficiency score: {sqlEfficiencyScore}</li>
+          </ul>
+        </div>
+      ),
     },
     {
       label: "Code Quality Score",
       value: clampScore(latestReport.code_quality_score),
       icon: Code2,
-      note: "Readability, structure, naming",
-    },
-    {
-      label: "Hidden Test Pass Rate",
-      value: clampScore(latestReport.hidden_test_pass_rate),
-      icon: ShieldAlert,
-      note: "Unseen case reliability",
+      id: "kpi-code-quality",
+      details: (
+        <div className="space-y-3">
+          <p>Code quality is derived from readable structure, maintainability, and the quality of the implementation choices.</p>
+          <ul className="space-y-2">
+            <li>Evaluator output: {dashboardCodeQuality || clampScore(latestReport.code_quality_score)}</li>
+            <li>DSA code quality average: {dsaCodeQualityScore}</li>
+            <li>OOPs design / readability average: {oopsDesignScore}</li>
+          </ul>
+        </div>
+      ),
     },
   ];
 
   const sectionCards = [
-    { label: "DSA Score", value: clampScore(latestReport.dsa_score), icon: Code2 },
-    { label: "SQL Score", value: clampScore(latestReport.sql_score), icon: Database },
-    { label: "OOPs Score", value: clampScore(latestReport.oops_score), icon: Wrench },
-    { label: "MCQ Score", value: clampScore(latestReport.mcq_score), icon: BookOpen },
+    {
+      label: "DSA Score",
+      value: clampScore(latestReport.dsa_score),
+      icon: Code2,
+      id: "section-dsa",
+      details: (
+        <div className="space-y-3">
+          <p>DSA is the most evidence-heavy section. It should explain the algorithm choice, complexity, and code quality.</p>
+          <ul className="space-y-2">
+            <li>Approach average: {dsaApproachScore}</li>
+            <li>Time complexity average: {dsaTimeComplexityScore} ({dsaTimeComplexity})</li>
+            <li>Space complexity average: {dsaSpaceComplexityScore} ({dsaSpaceComplexity})</li>
+            <li>Code quality average: {dsaCodeQualityScore}</li>
+          </ul>
+        </div>
+      ),
+    },
+    {
+      label: "SQL Score",
+      value: clampScore(latestReport.sql_score),
+      icon: Database,
+      id: "section-sql",
+      details: (
+        <div className="space-y-3">
+          <p>SQL is explained by correctness, business logic, and query efficiency.</p>
+          <ul className="space-y-2">
+            <li>SQL evaluated questions: {sqlEvaluations.length}</li>
+            <li>Efficiency average: {sqlEfficiencyScore}</li>
+            <li>Section score: {clampScore(latestReport.sql_score)}</li>
+          </ul>
+        </div>
+      ),
+    },
+    {
+      label: "OOPs Score",
+      value: clampScore(latestReport.oops_score),
+      icon: Wrench,
+      id: "section-oops",
+      details: (
+        <div className="space-y-3">
+          <p>OOPs is explained by design quality, readability, and maintainability.</p>
+          <ul className="space-y-2">
+            <li>OOPs evaluated questions: {oopsEvaluations.length}</li>
+            <li>Design / readability average: {oopsDesignScore}</li>
+            <li>Section score: {clampScore(latestReport.oops_score)}</li>
+          </ul>
+        </div>
+      ),
+    },
+    {
+      label: "MCQ Score",
+      value: clampScore(latestReport.mcq_score),
+      icon: BookOpen,
+      id: "section-mcq",
+      details: (
+        <div className="space-y-3">
+          <p>MCQ is determined by correctness across the scored questions.</p>
+          <ul className="space-y-2">
+            <li>MCQ evaluated questions: {mcqEvaluations.length}</li>
+            <li>Average question score: {mcqTopicScore}</li>
+            <li>Section score: {clampScore(latestReport.mcq_score)}</li>
+          </ul>
+        </div>
+      ),
+    },
   ];
 
   return (
     <main className="min-h-dvh bg-[#f6f8f4]">
-      <DashboardTopBar />
+      <AuthenticatedHeader
+        eyebrow="Jora Assessment"
+        title="Student Dashboard"
+        subtitle="Review your available assessment, report history, and current readiness status."
+        email={user.email}
+      />
 
       <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
         <section className="overflow-hidden rounded-[8px] border border-slate-200 bg-white shadow-sm">
@@ -625,7 +809,6 @@ export default async function DashboardPage() {
               <div className="mt-6">
                 <p className="text-sm font-medium text-slate-500">Overall Marks</p>
                 <p className="mt-2 text-5xl font-semibold text-slate-950">{marksScore}</p>
-                <p className="mt-2 text-sm text-slate-600">Current client-facing performance score</p>
               </div>
             </div>
           </div>
@@ -646,14 +829,8 @@ export default async function DashboardPage() {
         </section>
 
         <section className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          {sectionCards.map(({ label, value, icon: Icon }) => (
-            <article key={label} className="rounded-[8px] border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="flex items-center gap-2 text-slate-950">
-                <Icon size={18} />
-                <h3 className="font-semibold">{label}</h3>
-              </div>
-              <p className="mt-4 text-3xl font-semibold text-slate-950">{value}</p>
-            </article>
+          {sectionCards.map((section) => (
+            <ScoreCard key={section.label} {...section} />
           ))}
         </section>
 
@@ -701,7 +878,8 @@ export default async function DashboardPage() {
         <section className="mt-6 grid gap-4 lg:grid-cols-3">
           <article className="rounded-[8px] border border-slate-200 bg-white p-5 shadow-sm">
             <p className="text-sm font-medium text-slate-500">Runtime Percentile</p>
-            <p className="mt-3 text-2xl font-semibold text-slate-950">{latestReport.runtime_percentile || "Unknown"}</p>
+            <p className="mt-3 text-2xl font-semibold text-slate-950">{dashboardRuntime || latestReport.runtime_percentile || "Unknown"}</p>
+            <p className="mt-2 text-xs text-slate-500">Pulled from the dashboard evaluator output.</p>
           </article>
           <article className="rounded-[8px] border border-slate-200 bg-white p-5 shadow-sm">
             <p className="text-sm font-medium text-slate-500">Strongest Area</p>

@@ -1,12 +1,10 @@
 import {
   AlertTriangle,
   ArrowLeft,
-  BadgeCheck,
   BookOpen,
   Building2,
   Code2,
   Database,
-  GraduationCap,
   Search,
   TrendingUp,
   Wrench,
@@ -63,6 +61,16 @@ type CollegeRow = {
 };
 
 type ReadinessBucket = "Ready" | "Training Needed" | "Failed";
+type DrilldownKpi =
+  | "assessment"
+  | "batch"
+  | "college"
+  | "readiness"
+  | "score"
+  | "submitted"
+  | "student"
+  | "training_priority"
+  | "weakness";
 
 type EnrichedReport = ReportRow & {
   student_name: string;
@@ -156,6 +164,19 @@ function sectionIcon(section: string) {
   return BookOpen;
 }
 
+function normalizeText(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function buildFocusLabel(kpi: DrilldownKpi | "", value: string) {
+  const trimmed = value.trim();
+  if (!kpi) return "";
+  if (kpi === "score") return "Students sorted by latest score";
+  if (kpi === "submitted") return "Students sorted by recent submission";
+  const label = kpi === "training_priority" ? "Training priority" : kpi === "weakness" ? "Weakest section" : kpi.charAt(0).toUpperCase() + kpi.slice(1);
+  return trimmed ? `${label}: ${trimmed}` : label;
+}
+
 export default async function AdminReportStudentsPage({
   searchParams,
 }: {
@@ -168,6 +189,8 @@ export default async function AdminReportStudentsPage({
   const collegeFilter = asText(params.college);
   const batchFilter = asText(params.batch);
   const readinessFilter = asText(params.readiness);
+  const drilldownKpi = asText(params.kpi) as DrilldownKpi | "";
+  const drilldownValue = asText(params.value);
 
   const [
     { data: reportRows, error: reportError },
@@ -209,7 +232,7 @@ export default async function AdminReportStudentsPage({
   ]);
 
   if (reportError) {
-    throw new Error(`Could not load student drill-down data: ${reportError.message}`);
+      throw new Error(`Could not load student profile data: ${reportError.message}`);
   }
 
   const reports = (reportRows || []) as unknown as ReportRow[];
@@ -288,10 +311,23 @@ export default async function AdminReportStudentsPage({
     if (collegeFilter && student.college_name !== collegeFilter) return false;
     if (batchFilter && student.batch_name !== batchFilter) return false;
     if (readinessFilter && student.latest_bucket !== readinessFilter) return false;
+    if (drilldownKpi && drilldownValue) {
+      const focusValue = normalizeText(drilldownValue);
+      if (drilldownKpi === "assessment" && normalizeText(student.latest_assessment) !== focusValue) return false;
+      if (drilldownKpi === "batch" && normalizeText(student.batch_name) !== focusValue) return false;
+      if (drilldownKpi === "college" && normalizeText(student.college_name) !== focusValue) return false;
+      if (drilldownKpi === "readiness" && normalizeText(student.latest_bucket) !== focusValue) return false;
+      if (drilldownKpi === "weakness" && normalizeText(student.weakest_section) !== focusValue) return false;
+      if (drilldownKpi === "training_priority" && !normalizeText(student.training_priority).includes(focusValue)) return false;
+      if (drilldownKpi === "student" && !normalizeText(`${student.student_name} ${student.student_email} ${student.student_id}`).includes(focusValue)) return false;
+    }
     return true;
   });
 
   filteredStudents.sort((left, right) => {
+    if (drilldownKpi === "score" && right.latest_score !== left.latest_score) {
+      return right.latest_score - left.latest_score;
+    }
     const leftTime = left.last_submitted ? new Date(left.last_submitted).getTime() : 0;
     const rightTime = right.last_submitted ? new Date(right.last_submitted).getTime() : 0;
     return rightTime - leftTime;
@@ -306,23 +342,29 @@ export default async function AdminReportStudentsPage({
   const avgLatestScore = filteredStudents.length
     ? Math.round(filteredStudents.reduce((sum, student) => sum + student.latest_score, 0) / filteredStudents.length)
     : 0;
+  const focusLabel = buildFocusLabel(drilldownKpi, drilldownValue);
 
   return (
     <div className="grid gap-6">
-      <section className="rounded-[8px] border border-slate-200 bg-white p-6 shadow-sm">
+      <section className="rounded-[24px] border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
         <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <p className="text-sm font-semibold uppercase tracking-[0.18em] text-emerald-800">
-              Student Drill-Down
+              Student Profile
             </p>
-            <h2 className="mt-2 text-3xl font-semibold text-slate-950">Student assessment index</h2>
+            <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950 sm:text-3xl">Student assessment index</h2>
             <p className="mt-3 max-w-3xl leading-7 text-slate-600">
               Group all submitted reports by student so admins can identify who is ready, who needs training, and whose risk signals need manual review.
             </p>
+            {focusLabel ? (
+              <div className="mt-4 inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-sm font-semibold text-emerald-900">
+                Focus: {focusLabel}
+              </div>
+            ) : null}
           </div>
           <Link
             href="/admin/reports"
-            className="inline-flex items-center justify-center gap-2 rounded-[8px] border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+            className="inline-flex items-center justify-center gap-2 rounded-[12px] border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
           >
             <ArrowLeft size={16} />
             Back to Reports
@@ -330,7 +372,7 @@ export default async function AdminReportStudentsPage({
         </div>
       </section>
 
-      <section className="rounded-[8px] border border-slate-200 bg-white p-5 shadow-sm">
+      <section className="rounded-[24px] border border-slate-200 bg-white p-5 shadow-sm">
         <div className="mb-4">
           <h3 className="font-semibold text-slate-950">Filters</h3>
           <p className="mt-1 text-sm text-slate-600">Search the student population and isolate the readiness segment you want to review.</p>
@@ -342,10 +384,10 @@ export default async function AdminReportStudentsPage({
               name="q"
               defaultValue={asText(params.q)}
               placeholder="Search name or email"
-              className="w-full rounded-[8px] border border-slate-300 py-2 pl-9 pr-3 text-sm"
-            />
+            className="w-full rounded-[12px] border border-slate-300 py-2 pl-9 pr-3 text-sm"
+          />
           </div>
-          <select name="college" defaultValue={collegeFilter} className="rounded-[8px] border border-slate-300 px-3 py-2 text-sm">
+          <select name="college" defaultValue={collegeFilter} className="rounded-[12px] border border-slate-300 px-3 py-2 text-sm">
             <option value="">All colleges</option>
             {collegeOptions.map((college) => (
               <option key={college} value={college}>
@@ -353,7 +395,7 @@ export default async function AdminReportStudentsPage({
               </option>
             ))}
           </select>
-          <select name="batch" defaultValue={batchFilter} className="rounded-[8px] border border-slate-300 px-3 py-2 text-sm">
+          <select name="batch" defaultValue={batchFilter} className="rounded-[12px] border border-slate-300 px-3 py-2 text-sm">
             <option value="">All batches</option>
             {batchOptions.map((batch) => (
               <option key={batch} value={batch}>
@@ -361,47 +403,47 @@ export default async function AdminReportStudentsPage({
               </option>
             ))}
           </select>
-          <select name="readiness" defaultValue={readinessFilter} className="rounded-[8px] border border-slate-300 px-3 py-2 text-sm">
+          <select name="readiness" defaultValue={readinessFilter} className="rounded-[12px] border border-slate-300 px-3 py-2 text-sm">
             <option value="">All readiness buckets</option>
             <option value="Ready">Ready</option>
             <option value="Training Needed">Training Needed</option>
             <option value="Failed">Failed</option>
           </select>
           <div className="flex gap-2">
-            <button className="rounded-[8px] bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800">
+            <button className="rounded-[12px] bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800">
               Apply
             </button>
-            <a href="/admin/reports/students" className="rounded-[8px] border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+            <Link href="/admin/reports/students" className="rounded-[12px] border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
               Clear
-            </a>
+            </Link>
           </div>
         </form>
       </section>
 
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <article className="rounded-[8px] border border-slate-200 bg-white p-5 shadow-sm">
+        <article className="rounded-[20px] border border-slate-200 bg-white p-5 shadow-sm">
           <p className="text-sm font-medium text-slate-500">Students with Reports</p>
           <p className="mt-2 text-3xl font-semibold text-slate-950">{filteredStudents.length}</p>
           <p className="mt-2 text-xs text-slate-500">Filtered student population</p>
         </article>
-        <article className="rounded-[8px] border border-slate-200 bg-white p-5 shadow-sm">
+        <article className="rounded-[20px] border border-slate-200 bg-white p-5 shadow-sm">
           <p className="text-sm font-medium text-slate-500">Avg Latest Score</p>
           <p className="mt-2 text-3xl font-semibold text-slate-950">{avgLatestScore}</p>
           <p className="mt-2 text-xs text-slate-500">Latest marks score across students</p>
         </article>
-        <article className="rounded-[8px] border border-slate-200 bg-white p-5 shadow-sm">
+        <article className="rounded-[20px] border border-slate-200 bg-white p-5 shadow-sm">
           <p className="text-sm font-medium text-slate-500">Ready vs Training</p>
           <p className="mt-2 text-3xl font-semibold text-slate-950">{readyCount} / {trainingCount}</p>
           <p className="mt-2 text-xs text-slate-500">Ready students versus training-needed students</p>
         </article>
-        <article className="rounded-[8px] border border-slate-200 bg-white p-5 shadow-sm">
+        <article className="rounded-[20px] border border-slate-200 bg-white p-5 shadow-sm">
           <p className="text-sm font-medium text-slate-500">Failed</p>
           <p className="mt-2 text-3xl font-semibold text-slate-950">{failedCount}</p>
           <p className="mt-2 text-xs text-slate-500">Students currently blocked by low performance or high risk</p>
         </article>
       </section>
 
-      <section className="overflow-hidden rounded-[8px] border border-slate-200 bg-white shadow-sm">
+      <section className="overflow-hidden rounded-[20px] border border-slate-200 bg-white shadow-sm">
         <div className="overflow-x-auto">
           <table className="w-full min-w-[1240px] text-left text-sm">
             <thead className="bg-slate-50 text-slate-600">
@@ -431,14 +473,14 @@ export default async function AdminReportStudentsPage({
                       <p className="mt-1 text-xs text-slate-500">{student.college_name}</p>
                       <Link
                         href={`/admin/reports/students/${student.student_id}`}
-                        className="mt-3 inline-flex rounded-[8px] border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                        className="mt-3 inline-flex rounded-[12px] border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
                       >
                         Open Profile
                       </Link>
                     </td>
                     <td className="px-4 py-4 text-slate-700">{student.batch_name}</td>
                     <td className="px-4 py-4">
-                      <div className="inline-flex rounded-[8px] border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm font-semibold text-slate-800">
+                      <div className="inline-flex rounded-[12px] border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm font-semibold text-slate-800">
                         {student.attempts_count}
                       </div>
                     </td>
@@ -447,21 +489,21 @@ export default async function AdminReportStudentsPage({
                       <div className="grid gap-1 text-xs text-slate-600">
                         <span className="font-semibold text-slate-950">Latest {student.latest_score}</span>
                         <span>Best {student.best_score}</span>
-                        <span>Capability {student.capability_score}</span>
+                        <span>Problem Solving {student.capability_score}</span>
                       </div>
                     </td>
                     <td className="px-4 py-4">
-                      <span className={`inline-flex rounded-[8px] border px-2.5 py-1 text-xs font-semibold ${readinessClasses(student.latest_bucket)}`}>
+                      <span className={`inline-flex rounded-[12px] border px-2.5 py-1 text-xs font-semibold ${readinessClasses(student.latest_bucket)}`}>
                         {student.latest_bucket}
                       </span>
                     </td>
                     <td className="px-4 py-4">
                       <div className="grid gap-2">
-                        <span className="inline-flex w-fit items-center gap-1 rounded-[8px] border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-800">
+                        <span className="inline-flex w-fit items-center gap-1 rounded-[12px] border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-800">
                           <StrongIcon size={13} />
                           {student.strongest_section}
                         </span>
-                        <span className="inline-flex w-fit items-center gap-1 rounded-[8px] border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800">
+                        <span className="inline-flex w-fit items-center gap-1 rounded-[12px] border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800">
                           <WeakIcon size={13} />
                           {student.weakest_section}
                         </span>
@@ -469,11 +511,11 @@ export default async function AdminReportStudentsPage({
                     </td>
                     <td className="px-4 py-4">
                       <div className="grid gap-2">
-                        <span className={`inline-flex w-fit items-center gap-1 rounded-[8px] border px-2.5 py-1 text-xs font-semibold ${riskClasses(student.high_bruteforce)}`}>
+                        <span className={`inline-flex w-fit items-center gap-1 rounded-[12px] border px-2.5 py-1 text-xs font-semibold ${riskClasses(student.high_bruteforce)}`}>
                           <AlertTriangle size={13} />
                           BF {student.high_bruteforce ? "High" : "Clear"}
                         </span>
-                        <span className={`inline-flex w-fit items-center gap-1 rounded-[8px] border px-2.5 py-1 text-xs font-semibold ${riskClasses(student.high_hardcoding)}`}>
+                        <span className={`inline-flex w-fit items-center gap-1 rounded-[12px] border px-2.5 py-1 text-xs font-semibold ${riskClasses(student.high_hardcoding)}`}>
                           <Building2 size={13} />
                           HC {student.high_hardcoding ? "High" : "Clear"}
                         </span>
@@ -487,7 +529,7 @@ export default async function AdminReportStudentsPage({
               {filteredStudents.length === 0 ? (
                 <tr>
                   <td className="px-4 py-8 text-center text-slate-500" colSpan={10}>
-                    No students match the current drill-down filters.
+                    No students match the selected KPI view.
                   </td>
                 </tr>
               ) : null}
@@ -496,13 +538,13 @@ export default async function AdminReportStudentsPage({
         </div>
       </section>
 
-      <section className="rounded-[8px] border border-slate-200 bg-white p-5 shadow-sm">
+      <section className="rounded-[20px] border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex items-center gap-2 text-slate-950">
           <TrendingUp size={18} />
           <h3 className="font-semibold">Next Phase</h3>
         </div>
         <p className="mt-3 leading-7 text-slate-600">
-          The next drill-down layer will open each student profile with attempt history, readiness progression, and direct links to individual assessment report cards.
+          The next profile layer will open each student profile with attempt history, readiness progression, and direct links to individual assessment report cards.
         </p>
       </section>
     </div>

@@ -7,6 +7,19 @@ export type AssessmentLanguage = {
   judge0_language_id: number;
 };
 
+const compilerVersionLabels: Record<string, string> = {
+  python: "Python 3.12",
+  javascript: "JavaScript Node 22",
+  java: "Java 21",
+  cpp: "C++ 20 (GCC 14)",
+  c: "C23 (GCC 14)",
+  sql: "PostgreSQL 15",
+};
+
+export function getLanguageDisplayLabel(language: Pick<AssessmentLanguage, "id" | "label">) {
+  return compilerVersionLabels[language.id] || language.label;
+}
+
 export type AssessmentQuestion = {
   id: string;
   section: AssessmentSectionId;
@@ -20,6 +33,9 @@ export type AssessmentQuestion = {
   constraints?: string[];
   function_signature?: string;
   expected_approach?: string[];
+  expected_code?: string[];
+  expected_time_complexity?: string;
+  expected_space_complexity?: string;
   evaluator_context?: unknown;
   schema_ref?: string;
   misconception_mapping?: unknown;

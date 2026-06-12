@@ -1,68 +1,27 @@
-import {
-  BarChart3,
-  Building2,
-  ClipboardList,
-  FileText,
-  FileJson,
-  GraduationCap,
-  Layers3,
-  LibraryBig,
-  UsersRound,
-} from "lucide-react";
-import Link from "next/link";
 import type { ReactNode } from "react";
 import { requireAdmin } from "@/lib/admin/supabase-admin";
-
-const navItems = [
-  { href: "/admin", label: "Overview", icon: BarChart3 },
-  { href: "/admin/students", label: "Students", icon: UsersRound },
-  { href: "/admin/colleges", label: "Colleges", icon: Building2 },
-  { href: "/admin/batches", label: "Batches", icon: Layers3 },
-  { href: "/admin/subjects", label: "Subjects", icon: LibraryBig },
-  { href: "/admin/assessments", label: "Assessments", icon: ClipboardList },
-  { href: "/admin/reports", label: "Reports", icon: FileText },
-  { href: "/admin/question-bank", label: "Question Bank", icon: FileJson },
-];
+import { TeacherSidebar } from "@/components/admin/teacher-sidebar";
+import { AuthenticatedHeader } from "@/components/authenticated-header";
+import { adminUi } from "@/lib/admin/ui";
 
 export default async function AdminLayout({ children }: { children: ReactNode }) {
   const { profile } = await requireAdmin();
 
   return (
-    <main className="min-h-dvh bg-[#f6f8f4]">
-      <div className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:px-8">
-          <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.18em] text-emerald-800">
-              Jora Admin
-            </p>
-            <h1 className="mt-1 text-xl font-semibold text-slate-950">Control Panel</h1>
-          </div>
-          <div className="hidden items-center gap-2 text-sm text-slate-600 sm:flex">
-            <GraduationCap size={17} />
-            {profile?.email}
-          </div>
+    <main className={adminUi.appShell}>
+      <AuthenticatedHeader
+        eyebrow="Teacher workspace"
+        title="Student creation and report review"
+        subtitle="Manage assessments, batches, question banks, and student reports."
+        email={profile?.email || null}
+      />
+      <div className={adminUi.appFrame}>
+        <div className="grid gap-4 transition-[grid-template-columns] duration-200 lg:grid-cols-[var(--teacher-sidebar-width)_minmax(0,1fr)] lg:items-start">
+          <TeacherSidebar email={profile?.email || null} />
+          <section className="min-w-0">
+            {children}
+          </section>
         </div>
-      </div>
-
-      <div className="mx-auto grid max-w-7xl gap-6 px-4 py-6 sm:px-6 lg:grid-cols-[240px_1fr] lg:px-8">
-        <aside className="rounded-[8px] border border-slate-200 bg-white p-3 shadow-sm lg:sticky lg:top-6 lg:h-fit">
-          <nav className="grid gap-1">
-            {navItems.map((item) => {
-              const Icon = item.icon;
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className="flex items-center gap-2 rounded-[8px] px-3 py-2 text-sm font-medium text-slate-700 hover:bg-emerald-50 hover:text-emerald-900"
-                >
-                  <Icon size={17} />
-                  {item.label}
-                </Link>
-              );
-            })}
-          </nav>
-        </aside>
-        <section>{children}</section>
       </div>
     </main>
   );
