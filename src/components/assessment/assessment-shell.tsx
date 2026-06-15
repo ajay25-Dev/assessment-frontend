@@ -49,6 +49,7 @@ type AnswerState = {
   executionMemory: number | null;
   sqlExecutionMs: number | null;
   testResults?: TestResultsOutput | null;
+  sqlResult?: SqlRunResponse | null;
 };
 
 type ActiveTab = "problem" | "answer" | "results";
@@ -95,7 +96,7 @@ type DsaCalculationOutput = {
   openTestCaseScore: number;
   hiddenTestCaseScore: number | "Not available";
   expectedCodeScore: number;
-  approachScore: number;
+  approachScore: number | "Not available";
   timeComplexityScore: number | "Not available";
   spaceComplexityScore: number | "Not available";
   edgeCaseScore: number | "Not available";
@@ -268,10 +269,9 @@ function benchmarkScore(actual: number | null | undefined, ideal: number | null 
   const actualValue = typeof actual === "number" ? actual : Number(actual);
   const idealValue = typeof ideal === "number" ? ideal : Number(ideal);
 
-  if (!Number.isFinite(actualValue) || !Number.isFinite(idealValue) || idealValue <= 0) {
+  if (!Number.isFinite(actualValue) || !Number.isFinite(idealValue) || idealValue <= 0 || actualValue <= 0) {
     return "Not available";
   }
-  if (actualValue <= 0) return 100;
 
   return Math.max(0, Math.min(100, Math.round((idealValue / actualValue) * 100)));
 }
@@ -329,6 +329,7 @@ function initialAnswer(question: AssessmentQuestion): AnswerState {
     executionMemory: null,
     sqlExecutionMs: null,
     testResults: null,
+    sqlResult: null,
   };
 }
 
@@ -336,6 +337,7 @@ function stripTransientAnswerData(answer: AnswerState): AnswerState {
   return {
     ...answer,
     testResults: null,
+    sqlResult: null,
   };
 }
 
@@ -463,9 +465,12 @@ function buildDsaCalculationOutput(
       ? backendOutput.missing_expected_code.map((item) => String(item))
       : expectedCodeScore(expectedCode, code).missing,
   };
+  const hasDsaAttempt = answer.runs > 0 || answer.submissions > 0;
   const approach = typeof backendOutput.approach_score === "number"
     ? backendOutput.approach_score
-    : approachScore(expectedApproach, code);
+    : hasDsaAttempt
+      ? approachScore(expectedApproach, code)
+      : "Not available";
   const expectedApproachTags = Array.isArray(backendOutput.expected_approach_tags)
     ? backendOutput.expected_approach_tags.map((item) => String(item))
     : expectedApproach;
@@ -525,13 +530,17 @@ function buildDsaCalculationOutput(
             : "Not available")
       : "Not available";
   const timeComplexityScore =
-    typeof backendOutput.time_complexity_score === "number"
+    hasDsaAttempt && typeof backendOutput.time_complexity_score === "number"
       ? backendOutput.time_complexity_score
-      : benchmarkScore(executionTimeMs, idealTime);
+      : hasDsaAttempt
+        ? benchmarkScore(executionTimeMs, idealTime)
+        : "Not available";
   const spaceComplexityScore =
-    typeof backendOutput.space_complexity_score === "number"
+    hasDsaAttempt && typeof backendOutput.space_complexity_score === "number"
       ? backendOutput.space_complexity_score
-      : benchmarkScore(executionMemoryKb, idealSpace);
+      : hasDsaAttempt
+        ? benchmarkScore(executionMemoryKb, idealSpace)
+        : "Not available";
   const edgeCaseCandidates = results.filter((test) =>
     /(edge|boundary|empty|duplicate|null|zero|single|large|cycle|self|same)/i.test(
       `${test.purpose} ${test.input} ${test.expected}`,
@@ -866,6 +875,10 @@ export function AssessmentShell({
   const activeIndex = questions.findIndex((question) => question.id === activeQuestionId);
   const activeQuestion = questions[Math.max(0, activeIndex)];
   const activeAnswer = answers[activeQuestion.id] || initialAnswer(activeQuestion);
+  const activeSectionQuestionIndex = questions
+    .filter((question) => question.section === activeQuestion.section)
+    .findIndex((question) => question.id === activeQuestion.id);
+  const activeSectionQuestionNumber = activeSectionQuestionIndex >= 0 ? activeSectionQuestionIndex + 1 : activeIndex + 1;
   const activeTemporaryScorePreview = temporaryScorePreviewByQuestion[activeQuestion.id];
   const activeDsaCalculationOutput = buildDsaCalculationOutput(
     activeQuestion,
@@ -1152,8 +1165,8 @@ export function AssessmentShell({
     setActiveQuestionId(questionId);
     setActiveTab("answer");
     setNavOpen(false);
-    setSqlResult(null);
-    setTestResults((current) => answers[questionId]?.testResults || current);
+    setSqlResult(answers[questionId]?.sqlResult || null);
+    setTestResults(answers[questionId]?.testResults || null);
     setAnimatingTestIndex(-1);
     setAnswers((current) => ({
       ...current,
@@ -1171,25 +1184,20 @@ export function AssessmentShell({
     });
   }
 
-  async function persistDsaSubmission(
+  async function persistQuestionSubmission(
     nextAnswer: AnswerState,
     structuredTestResults: TestResultsOutput | null,
   ) {
-    if (activeQuestion.section !== "DSA" || activeQuestion.engine !== "code") {
-      return;
-    }
-
-    const calculationOutput = buildDsaCalculationOutput(
-      activeQuestion,
-      nextAnswer,
-      structuredTestResults,
-    );
-    if (!calculationOutput) return;
+    const sectionSlug = activeQuestion.section.toLowerCase();
+    const calculationOutput =
+      activeQuestion.section === "DSA"
+        ? buildDsaCalculationOutput(activeQuestion, nextAnswer, structuredTestResults)
+        : null;
 
     const {
       data: { session },
     } = await authClient.auth.getSession();
-    const response = await fetch("/api/assessment/dsa/submit", {
+    const response = await fetch(`/api/assessment/question/${sectionSlug}/submit`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1213,7 +1221,7 @@ export function AssessmentShell({
           testResults: structuredTestResults,
           test_results: structuredTestResults,
         },
-        dsa_output: calculationOutput,
+        dsa_output: calculationOutput || undefined,
         test_results: structuredTestResults,
         access_token: session?.access_token || null,
       }),
@@ -1225,7 +1233,7 @@ export function AssessmentShell({
     } | null;
 
     if (!response.ok) {
-      throw new Error(payload?.message || `DSA persistence failed with status ${response.status}`);
+      throw new Error(payload?.message || `Question persistence failed with status ${response.status}`);
     }
 
     if (payload?.attempt_id) {
@@ -1233,7 +1241,7 @@ export function AssessmentShell({
       localStorage.setItem(`${storageKey}:attemptId`, payload.attempt_id);
     }
 
-    if (payload?.evaluation?.output) {
+    if (activeQuestion.section === "DSA" && payload?.evaluation?.output) {
       setPersistedDsaEvaluationByQuestion((current) => ({
         ...current,
         [activeQuestion.id]: payload.evaluation?.output || null,
@@ -1327,9 +1335,9 @@ export function AssessmentShell({
         };
         if (action === "submit") {
           try {
-            await persistDsaSubmission(nextAnswer, parsedTestResults);
+            await persistQuestionSubmission(nextAnswer, parsedTestResults);
           } catch (persistError) {
-            console.warn("Failed to persist DSA question output", persistError);
+            console.warn("Failed to persist question output", persistError);
           }
         }
         updateActiveAnswer({
@@ -1367,9 +1375,9 @@ export function AssessmentShell({
         };
         if (action === "submit") {
           try {
-            await persistDsaSubmission(nextAnswer, parsedTestResults || visibleFallback);
+            await persistQuestionSubmission(nextAnswer, parsedTestResults || visibleFallback);
           } catch (persistError) {
-            console.warn("Failed to persist DSA question output", persistError);
+            console.warn("Failed to persist question output", persistError);
           }
         }
         updateActiveAnswer({
@@ -1402,6 +1410,7 @@ export function AssessmentShell({
     setIsExecuting(true);
     updateActiveAnswer({
       resultMessage: `${action === "run" ? "Running SQL query" : "Submitting SQL query"}...`,
+      sqlResult: null,
     });
     setSqlResult(null);
     setActiveTab("results");
@@ -1434,13 +1443,23 @@ export function AssessmentShell({
       const resultMessage = payload?.error
         ? `SQL error:\n${payload.error}`
         : `SQL completed. Rows: ${payload?.row_count ?? 0}. Execution: ${payload?.execution_ms ?? 0} ms.`;
-      updateActiveAnswer({
+      const nextAnswer: AnswerState = {
+        ...activeAnswer,
         runs: action === "run" ? activeAnswer.runs + 1 : activeAnswer.runs,
         submissions: action === "submit" ? activeAnswer.submissions + 1 : activeAnswer.submissions,
         status: action === "submit" ? "submitted" : "ran",
         sqlExecutionMs: typeof payload?.execution_ms === "number" ? payload.execution_ms : null,
         resultMessage,
-      });
+        sqlResult: payload || null,
+      };
+      if (action === "submit") {
+        try {
+          await persistQuestionSubmission(nextAnswer, null);
+        } catch (persistError) {
+          console.warn("Failed to persist SQL question output", persistError);
+        }
+      }
+      updateActiveAnswer(nextAnswer);
     } catch (error) {
       setSqlResult(null);
       setTemporaryScorePreviewByQuestion((current) => ({
@@ -1448,12 +1467,22 @@ export function AssessmentShell({
         [activeQuestion.id]: buildTemporaryScorePreview(activeQuestion, activeAnswer, null),
       }));
       const resultMessage = error instanceof Error ? error.message : "SQL request failed.";
-      updateActiveAnswer({
+      const nextAnswer: AnswerState = {
+        ...activeAnswer,
         runs: action === "run" ? activeAnswer.runs + 1 : activeAnswer.runs,
         submissions: action === "submit" ? activeAnswer.submissions + 1 : activeAnswer.submissions,
         status: action === "submit" ? "submitted" : "ran",
         resultMessage,
-      });
+        sqlResult: null,
+      };
+      if (action === "submit") {
+        try {
+          await persistQuestionSubmission(nextAnswer, null);
+        } catch (persistError) {
+          console.warn("Failed to persist SQL question output", persistError);
+        }
+      }
+      updateActiveAnswer(nextAnswer);
     } finally {
       setIsExecuting(false);
     }
@@ -1494,6 +1523,38 @@ export function AssessmentShell({
     scrollToResults();
   }
 
+  async function submitMcqQuestion() {
+    const resultMessage = "Question submitted. Review the temporary score preview below.";
+    const nextAnswer: AnswerState = {
+      ...activeAnswer,
+      submissions: activeAnswer.submissions + 1,
+      status: "submitted",
+      resultMessage,
+    };
+
+    setTemporaryScorePreviewByQuestion((current) => ({
+      ...current,
+      [activeQuestion.id]: buildTemporaryScorePreview(activeQuestion, nextAnswer, null),
+    }));
+
+    try {
+      await persistQuestionSubmission(nextAnswer, null);
+    } catch (persistError) {
+      console.warn("Failed to persist MCQ question output", persistError);
+    }
+
+    updateActiveAnswer(nextAnswer);
+
+    const nextQuestion = questions[activeIndex + 1];
+    if (nextQuestion) {
+      changeQuestion(nextQuestion.id);
+      return;
+    }
+
+    setActiveTab("results");
+    scrollToResults();
+  }
+
   function submitQuestion() {
     if (isExecuting || isIntegrityLocked) {
       updateActiveAnswer({
@@ -1516,25 +1577,7 @@ export function AssessmentShell({
       return;
     }
 
-    setTemporaryScorePreviewByQuestion((current) => ({
-      ...current,
-      [activeQuestion.id]: buildTemporaryScorePreview(activeQuestion, activeAnswer, null),
-    }));
-    const resultMessage = "Question submitted. Review the temporary score preview below.";
-    updateActiveAnswer({
-      submissions: activeAnswer.submissions + 1,
-      status: "submitted",
-      resultMessage,
-    });
-
-    const nextQuestion = questions[activeIndex + 1];
-    if (nextQuestion) {
-      changeQuestion(nextQuestion.id);
-      return;
-    }
-
-    setActiveTab("results");
-    scrollToResults();
+    void submitMcqQuestion();
   }
 
   const saveNow = useCallback(() => {
@@ -1621,6 +1664,9 @@ export function AssessmentShell({
       if (payload?.attempt_id) {
         setPersistedAttemptId(payload.attempt_id);
         localStorage.setItem(`${storageKey}:attemptId`, payload.attempt_id);
+        const stagePayload = { ...submissionBody } as Record<string, unknown>;
+        delete stagePayload.access_token;
+        localStorage.setItem(`assessment-finalize:${payload.attempt_id}`, JSON.stringify(stagePayload));
       }
       localStorage.removeItem(storageKey);
       localStorage.removeItem(`${storageKey}:startedAt`);
@@ -1661,6 +1707,7 @@ export function AssessmentShell({
     isExecuting,
     isFinalizing,
     integrityViolation,
+    persistedAttemptId,
     router,
     saveNow,
     storageKey,
@@ -2074,9 +2121,13 @@ export function AssessmentShell({
                     {activeQuestion.marks || 5} marks
                   </span>
                 </div>
-                {activeQuestion.section !== "MCQ" ? (
+                {activeQuestion.section === "MCQ" ? (
+                  <h2 className="mt-2 text-xl font-semibold tracking-[-0.02em] text-slate-950">
+                    Question {activeSectionQuestionNumber}
+                  </h2>
+                ) : (
                   <h2 className="mt-2 text-xl font-semibold tracking-[-0.02em] text-slate-950">{activeQuestion.title}</h2>
-                ) : null}
+                )}
               </div>
               <div className="flex items-center gap-2 text-xs text-slate-600">
                 {isTimedOut || isSectionTimedOut ? (
@@ -2107,7 +2158,7 @@ export function AssessmentShell({
           </div>
 
           <div className="grid min-h-0 gap-3 overflow-hidden p-3 lg:grid-cols-[minmax(380px,0.92fr)_minmax(460px,1.25fr)]">
-            <QuestionPrompt question={activeQuestion} visible={activeTab === "problem"} />
+            <QuestionPrompt question={activeQuestion} questionNumber={activeSectionQuestionNumber} visible={activeTab === "problem"} />
             <AnswerPanel
               question={activeQuestion}
               assessmentBank={assessmentBank}
@@ -2469,7 +2520,9 @@ function QuestionNavigator({
                     <span className={`flex h-7 w-7 items-center justify-center rounded-[7px] border text-xs font-semibold ${statusClass(answer.status, answer.marked)}`}>
                       {index + 1}
                     </span>
-                    <span className="truncate text-slate-800">{question.title}</span>
+                    <span className="truncate text-slate-800">
+                      {question.section === "MCQ" ? `Question ${index + 1}` : question.title}
+                    </span>
                     {answer.marked ? <Flag size={14} className="text-amber-600" /> : null}
                   </button>
                 );
@@ -2482,7 +2535,15 @@ function QuestionNavigator({
   );
 }
 
-function QuestionPrompt({ question, visible }: { question: AssessmentQuestion; visible: boolean }) {
+function QuestionPrompt({
+  question,
+  questionNumber,
+  visible,
+}: {
+  question: AssessmentQuestion;
+  questionNumber: number;
+  visible: boolean;
+}) {
   return (
     <article className={`${visible ? "block" : "hidden"} min-h-0 overflow-auto rounded-[14px] border border-slate-200 bg-white p-4 shadow-sm lg:block lg:h-fit lg:self-start sm:p-5`}>
       <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-100 pb-3">
@@ -2495,10 +2556,12 @@ function QuestionPrompt({ question, visible }: { question: AssessmentQuestion; v
         </span>
       </div>
 
-      {question.title ? (
+      {question.title || question.engine === "mcq" ? (
         <div className="mb-3 rounded-[12px] border border-slate-200 bg-white px-4 py-3">
           <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Question</p>
-          <h2 className="mt-1 text-sm font-semibold leading-6 text-slate-950 break-words">{question.title}</h2>
+          <h2 className="mt-1 text-sm font-semibold leading-6 text-slate-950 break-words">
+            {question.engine === "mcq" ? `Question ${questionNumber}` : question.title}
+          </h2>
         </div>
       ) : null}
 
