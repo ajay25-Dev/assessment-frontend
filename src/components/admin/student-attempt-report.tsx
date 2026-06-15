@@ -165,7 +165,7 @@ function sectionParameterRows(params: {
     return [
       {
         label: "Score Basis",
-        value: "Score is calculated from visible test correctness, expected code checklist coverage, complexity rank gap, and edge-case performance.",
+        value: "Score is calculated from visible test correctness, expected code checklist coverage, Judge0 runtime/memory versus the question-bank ideal targets, and edge-case performance.",
       },
       { label: "Correctness Score", value: output.correctness_score },
       { label: "Open Test Case Score", value: output.open_test_case_score },

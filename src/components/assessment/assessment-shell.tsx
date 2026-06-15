@@ -264,6 +264,25 @@ function rankGapScore(expectedRank: number, studentRank: number) {
   return Math.max(0, 100 - gap * 10);
 }
 
+function benchmarkScore(actual: number | null | undefined, ideal: number | null | undefined) {
+  const actualValue = typeof actual === "number" ? actual : Number(actual);
+  const idealValue = typeof ideal === "number" ? ideal : Number(ideal);
+
+  if (!Number.isFinite(actualValue) || !Number.isFinite(idealValue) || idealValue <= 0) {
+    return "Not available";
+  }
+  if (actualValue <= 0) return 100;
+
+  return Math.max(0, Math.min(100, Math.round((idealValue / actualValue) * 100)));
+}
+
+function parseExecutionTimeMs(value: string | null) {
+  if (typeof value !== "string") return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  return Math.round(parsed * 1000);
+}
+
 function complexityRankLabelLocal(rank: number | "Not available") {
   if (typeof rank !== "number") return "Not available";
   if (rank <= 1) return "O(1)";
@@ -316,8 +335,6 @@ function initialAnswer(question: AssessmentQuestion): AnswerState {
 function stripTransientAnswerData(answer: AnswerState): AnswerState {
   return {
     ...answer,
-    executionTime: null,
-    executionMemory: null,
     testResults: null,
   };
 }
@@ -461,6 +478,12 @@ function buildDsaCalculationOutput(
   const expectedSpaceComplexity = String(
     backendOutput.expected_space_complexity || question.expected_space_complexity || "Not available",
   );
+  const idealTime = Number(question.ideal_time);
+  const idealSpace = Number(question.ideal_space);
+  const executionTimeMs = parseExecutionTimeMs(answer.executionTime);
+  const executionMemoryKb = typeof answer.executionMemory === "number"
+    ? answer.executionMemory
+    : Number(answer.executionMemory);
   const expectedTimeComplexityRank = typeof backendOutput.expected_time_complexity_rank === "number"
     ? backendOutput.expected_time_complexity_rank
     : "Not available";
@@ -504,11 +527,11 @@ function buildDsaCalculationOutput(
   const timeComplexityScore =
     typeof backendOutput.time_complexity_score === "number"
       ? backendOutput.time_complexity_score
-      : "Not available";
+      : benchmarkScore(executionTimeMs, idealTime);
   const spaceComplexityScore =
     typeof backendOutput.space_complexity_score === "number"
       ? backendOutput.space_complexity_score
-      : "Not available";
+      : benchmarkScore(executionMemoryKb, idealSpace);
   const edgeCaseCandidates = results.filter((test) =>
     /(edge|boundary|empty|duplicate|null|zero|single|large|cycle|self|same)/i.test(
       `${test.purpose} ${test.input} ${test.expected}`,
@@ -1185,6 +1208,8 @@ export function AssessmentShell({
           runs: nextAnswer.runs,
           submissions: nextAnswer.submissions,
           status: nextAnswer.status,
+          executionTime: nextAnswer.executionTime,
+          executionMemory: nextAnswer.executionMemory,
           testResults: structuredTestResults,
           test_results: structuredTestResults,
         },
@@ -2222,7 +2247,7 @@ export function AssessmentShell({
                         </div>
                       </div>
 
-                      <div className="grid gap-3 sm:grid-cols-2">
+                      {/* <div className="grid gap-3 sm:grid-cols-2">
                         <div className="rounded-[8px] border border-sky-700/30 bg-slate-950/40 p-3">
                           <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-200">Expected time complexity</div>
                           <div className="mt-1 text-sm text-white">{activeDsaCalculationOutput.expectedTimeComplexity}</div>
@@ -2249,7 +2274,7 @@ export function AssessmentShell({
                             Calculated space complexity: {activeDsaCalculationOutput.studentSpaceComplexityLabel}
                           </div>
                         </div>
-                      </div>
+                      </div> */}
 
                       <div className="grid gap-3 sm:grid-cols-2">
                         <div className="rounded-[8px] border border-sky-700/30 bg-slate-950/40 p-3">

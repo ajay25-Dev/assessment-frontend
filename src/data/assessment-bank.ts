@@ -36,6 +36,8 @@ export type AssessmentQuestion = {
   expected_code?: string[];
   expected_time_complexity?: string;
   expected_space_complexity?: string;
+  ideal_time?: number;
+  ideal_space?: number;
   evaluator_context?: unknown;
   schema_ref?: string;
   misconception_mapping?: unknown;
