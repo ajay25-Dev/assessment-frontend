@@ -45,6 +45,7 @@ type ProfileRow = {
   id: string;
   email: string | null;
   full_name: string | null;
+  roll_number: string | null;
 };
 
 type BatchStudentRow = {
@@ -66,6 +67,7 @@ type CollegeRow = {
 
 type FilteredReport = ReportRow & {
   student_name: string;
+  student_roll_number: string;
   student_email: string;
   batch_name: string;
   college_name: string;
@@ -213,7 +215,7 @@ export default async function AdminReportsPage({
       )
       .order("created_at", { ascending: false })
       .limit(500),
-    supabase.from("profiles").select("id,email,full_name"),
+    supabase.from("profiles").select("id,email,full_name,roll_number"),
     supabase.from("batch_students").select("batch_id,student_id,created_at").order("created_at", { ascending: false }),
     supabase.from("batches").select("id,name,college_id").order("name"),
     supabase.from("colleges").select("id,name").order("name"),
@@ -248,6 +250,7 @@ export default async function AdminReportsPage({
     return {
       ...report,
       student_name: profile?.full_name || "Unnamed student",
+      student_roll_number: profile?.roll_number || "-",
       student_email: profile?.email || report.student_id || "-",
       batch_name: batch?.name || "-",
       college_name: collegeName,
@@ -263,7 +266,7 @@ export default async function AdminReportsPage({
     const query = queryFilter.trim();
 
     if (query) {
-      const haystack = `${report.student_name} ${report.student_email} ${report.assessment_title || ""} ${report.batch_name} ${report.college_name}`.toLowerCase();
+      const haystack = `${report.student_name} ${report.student_roll_number} ${report.student_email} ${report.assessment_title || ""} ${report.batch_name} ${report.college_name}`.toLowerCase();
       if (!haystack.includes(query)) return false;
     }
     if (assessmentFilter && report.assessment_title !== assessmentFilter) return false;
@@ -412,7 +415,7 @@ export default async function AdminReportsPage({
             <input
               name="q"
               defaultValue={queryFilter}
-              placeholder="Search student name or email"
+              placeholder="Search student name, roll number, or email"
               className="w-full rounded-[12px] border border-[var(--color-border-strong)] bg-white py-2.5 pl-9 pr-3 text-sm outline-none transition focus:border-[var(--color-primary-300)] focus:ring-2 focus:ring-[var(--color-primary-100)]"
             />
           </div>
@@ -504,6 +507,7 @@ export default async function AdminReportsPage({
                         <Link href={profileHref} className="block rounded-[14px] p-2 -m-2 transition hover:bg-white">
                           <div className="space-y-1.5">
                             <p className="font-semibold text-slate-950">{report.student_name}</p>
+                            <p className="text-xs text-slate-500">{report.student_roll_number}</p>
                             <p className="text-xs text-slate-500">{report.student_email}</p>
                             <div className="flex flex-wrap gap-2 text-xs text-slate-500">
                               <span>{report.college_name}</span>
@@ -593,6 +597,7 @@ export default async function AdminReportsPage({
                     <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">#{index + 1}</p>
                     <Link href={profileHref} className="block rounded-[12px] p-2 -m-2 transition hover:bg-white">
                       <p className="truncate text-base font-semibold text-slate-950">{report.student_name}</p>
+                      <p className="mt-1 text-xs text-slate-500">{report.student_roll_number}</p>
                       <p className="mt-1 text-xs text-slate-500">{report.student_email}</p>
                       <p className="mt-1 text-xs text-slate-500">{report.batch_name} · {report.college_name}</p>
                       <p className="mt-2 text-xs font-semibold text-emerald-800">Student Profile</p>

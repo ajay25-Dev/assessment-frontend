@@ -45,6 +45,8 @@ type AnswerState = {
   submissions: number;
   status: "unvisited" | "saved" | "ran" | "submitted";
   resultMessage: string;
+  executionTime: string | null;
+  executionMemory: number | null;
   sqlExecutionMs: number | null;
   testResults?: TestResultsOutput | null;
 };
@@ -105,6 +107,8 @@ type DsaCalculationOutput = {
   totalTestsPassed: string;
   matchedExpectedCode: string[];
   missingExpectedCode: string[];
+  expectedApproachTags: string[];
+  aiReturnedApproachTags: string[];
   expectedTimeComplexity: string;
   expectedTimeComplexityRank: number | "Not available";
   expectedTimeComplexityLabel: string;
@@ -204,7 +208,7 @@ function expectedCodeScore(expectedSignals: string[], code: string) {
   };
 }
 
-function approachScore(expectedApproach: string[], code: string, correctnessScore: number) {
+function approachScore(expectedApproach: string[], code: string) {
   const tokens = new Set(normalizeText(code).split(/\s+/).filter(Boolean));
   const matches = expectedApproach.map((item) => {
     const point = normalizeText(item);
@@ -220,7 +224,7 @@ function approachScore(expectedApproach: string[], code: string, correctnessScor
     0,
     Math.min(100, Math.round((matches.reduce((sum: number, value) => sum + value, 0) / (expectedApproach.length || 1)) * 100)),
   );
-  return Math.max(0, Math.min(100, Math.round(0.75 * matchPercentage + 0.25 * correctnessScore)));
+  return Math.max(0, Math.min(100, Math.round(matchPercentage)));
 }
 
 function resolveComplexityRankLocal(value: string) {
@@ -258,6 +262,25 @@ function rankGapScore(expectedRank: number, studentRank: number) {
   const gap = studentRank - expectedRank;
   if (gap <= 0) return 100;
   return Math.max(0, 100 - gap * 10);
+}
+
+function benchmarkScore(actual: number | null | undefined, ideal: number | null | undefined) {
+  const actualValue = typeof actual === "number" ? actual : Number(actual);
+  const idealValue = typeof ideal === "number" ? ideal : Number(ideal);
+
+  if (!Number.isFinite(actualValue) || !Number.isFinite(idealValue) || idealValue <= 0) {
+    return "Not available";
+  }
+  if (actualValue <= 0) return 100;
+
+  return Math.max(0, Math.min(100, Math.round((idealValue / actualValue) * 100)));
+}
+
+function parseExecutionTimeMs(value: string | null) {
+  if (typeof value !== "string") return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  return Math.round(parsed * 1000);
 }
 
 function complexityRankLabelLocal(rank: number | "Not available") {
@@ -302,6 +325,8 @@ function initialAnswer(question: AssessmentQuestion): AnswerState {
     submissions: 0,
     status: "unvisited",
     resultMessage: "No run yet.",
+    executionTime: null,
+    executionMemory: null,
     sqlExecutionMs: null,
     testResults: null,
   };
@@ -440,13 +465,25 @@ function buildDsaCalculationOutput(
   };
   const approach = typeof backendOutput.approach_score === "number"
     ? backendOutput.approach_score
-    : approachScore(expectedApproach, code, correctnessScore);
+    : approachScore(expectedApproach, code);
+  const expectedApproachTags = Array.isArray(backendOutput.expected_approach_tags)
+    ? backendOutput.expected_approach_tags.map((item) => String(item))
+    : expectedApproach;
+  const aiReturnedApproachTags = Array.isArray(backendOutput.ai_returned_approach_tags)
+    ? backendOutput.ai_returned_approach_tags.map((item) => String(item))
+    : [];
   const expectedTimeComplexity = String(
     backendOutput.expected_time_complexity || question.expected_time_complexity || "Not available",
   );
   const expectedSpaceComplexity = String(
     backendOutput.expected_space_complexity || question.expected_space_complexity || "Not available",
   );
+  const idealTime = Number(question.ideal_time);
+  const idealSpace = Number(question.ideal_space);
+  const executionTimeMs = parseExecutionTimeMs(answer.executionTime);
+  const executionMemoryKb = typeof answer.executionMemory === "number"
+    ? answer.executionMemory
+    : Number(answer.executionMemory);
   const expectedTimeComplexityRank = typeof backendOutput.expected_time_complexity_rank === "number"
     ? backendOutput.expected_time_complexity_rank
     : "Not available";
@@ -490,11 +527,11 @@ function buildDsaCalculationOutput(
   const timeComplexityScore =
     typeof backendOutput.time_complexity_score === "number"
       ? backendOutput.time_complexity_score
-      : "Not available";
+      : benchmarkScore(executionTimeMs, idealTime);
   const spaceComplexityScore =
     typeof backendOutput.space_complexity_score === "number"
       ? backendOutput.space_complexity_score
-      : "Not available";
+      : benchmarkScore(executionMemoryKb, idealSpace);
   const edgeCaseCandidates = results.filter((test) =>
     /(edge|boundary|empty|duplicate|null|zero|single|large|cycle|self|same)/i.test(
       `${test.purpose} ${test.input} ${test.expected}`,
@@ -506,7 +543,9 @@ function buildDsaCalculationOutput(
     : "Not available";
   const scoreParts = [
     correctnessScore,
-    expectedCodeBreakdown.score,
+    openTestCaseScore,
+    typeof hiddenTestCaseScore === "number" ? hiddenTestCaseScore : null,
+    approach,
     typeof timeComplexityScore === "number" ? timeComplexityScore : null,
     typeof spaceComplexityScore === "number" ? spaceComplexityScore : null,
     typeof edgeCaseScore === "number" ? edgeCaseScore : null,
@@ -533,6 +572,9 @@ function buildDsaCalculationOutput(
     totalTestsPassed: `${openPassed + hiddenPassed} / ${openTotal + hiddenTotal}`,
     matchedExpectedCode: expectedCodeBreakdown.matched,
     missingExpectedCode: expectedCodeBreakdown.missing,
+    expectedApproach: expectedApproachTags,
+    expectedApproachTags,
+    aiReturnedApproachTags,
     expectedTimeComplexity,
     expectedTimeComplexityRank,
     expectedTimeComplexityLabel,
@@ -545,7 +587,6 @@ function buildDsaCalculationOutput(
     studentSpaceComplexityRank,
     studentSpaceComplexityLabel,
     spaceComplexityRankGap,
-    expectedApproach,
     expectedCode,
     failedCaseAnalysis: edgeCaseCandidates.filter((test) => !test.passed).map((test) => test.purpose),
     missedEdgeCases: edgeCaseCandidates.filter((test) => !test.passed).map((test) => test.purpose),
@@ -1167,6 +1208,8 @@ export function AssessmentShell({
           runs: nextAnswer.runs,
           submissions: nextAnswer.submissions,
           status: nextAnswer.status,
+          executionTime: nextAnswer.executionTime,
+          executionMemory: nextAnswer.executionMemory,
           testResults: structuredTestResults,
           test_results: structuredTestResults,
         },
@@ -1236,6 +1279,7 @@ export function AssessmentShell({
       const compileOutput = payload?.compile_output || "";
       const status = payload?.status?.description || "Completed";
       const time = payload?.time || "";
+      const memory = typeof payload?.memory === "number" ? payload.memory : null;
       const isError = payload?.status?.id === 6 || payload?.status?.id === 11;
 
       // Prefer backend-parsed structured test results, then fall back to stdout markers.
@@ -1277,6 +1321,8 @@ export function AssessmentShell({
           submissions: nextSubmissions,
           status: action === "submit" ? "submitted" : "ran",
           resultMessage,
+          executionTime: time || null,
+          executionMemory: memory,
           testResults: parsedTestResults,
         };
         if (action === "submit") {
@@ -1315,6 +1361,8 @@ export function AssessmentShell({
           submissions: nextSubmissions,
           status: action === "submit" ? "submitted" : "ran",
           resultMessage,
+          executionTime: time || null,
+          executionMemory: memory,
           testResults: parsedTestResults || visibleFallback,
         };
         if (action === "submit") {
@@ -1339,6 +1387,8 @@ export function AssessmentShell({
         submissions: action === "submit" ? activeAnswer.submissions + 1 : activeAnswer.submissions,
         status: action === "submit" ? "submitted" : "ran",
         resultMessage,
+        executionTime: null,
+        executionMemory: null,
         testResults: visibleFallback,
       });
     } finally {
@@ -2083,6 +2133,22 @@ export function AssessmentShell({
                   <span>{activeQuestion.engine.toUpperCase()}</span>
                 </div>
                 <pre className="whitespace-pre-wrap font-mono text-xs leading-6 text-slate-100">{activeAnswer.resultMessage}</pre>
+                {activeQuestion.engine === "code" && (activeAnswer.executionTime || typeof activeAnswer.executionMemory === "number") ? (
+                  <div className="mt-3 grid gap-2 text-xs text-slate-300 sm:grid-cols-2">
+                    <div className="rounded-[8px] border border-slate-700 bg-slate-950/60 px-3 py-2">
+                      <div className="font-semibold uppercase tracking-[0.12em] text-slate-400">Judge0 time</div>
+                      <div className="mt-1 text-sm text-slate-100">{activeAnswer.executionTime || "Not available"}</div>
+                    </div>
+                    <div className="rounded-[8px] border border-slate-700 bg-slate-950/60 px-3 py-2">
+                      <div className="font-semibold uppercase tracking-[0.12em] text-slate-400">Judge0 memory</div>
+                      <div className="mt-1 text-sm text-slate-100">
+                        {typeof activeAnswer.executionMemory === "number"
+                          ? `${activeAnswer.executionMemory} KB`
+                          : "Not available"}
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
               </div>
               {activeQuestion.engine === "sql" ? (
                 <SqlResultGrid
@@ -2137,7 +2203,6 @@ export function AssessmentShell({
                           { label: "Correctness score", value: activeDsaCalculationOutput.correctnessScore },
                           { label: "Open test score", value: activeDsaCalculationOutput.openTestCaseScore },
                           { label: "Hidden test score", value: activeDsaCalculationOutput.hiddenTestCaseScore },
-                          { label: "Expected code score", value: activeDsaCalculationOutput.expectedCodeScore },
                           { label: "Approach score", value: activeDsaCalculationOutput.approachScore },
                           { label: "Time complexity score", value: activeDsaCalculationOutput.timeComplexityScore },
                           { label: "Space complexity score", value: activeDsaCalculationOutput.spaceComplexityScore },
@@ -2148,10 +2213,41 @@ export function AssessmentShell({
                             <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-200">{item.label}</div>
                             <div className="mt-1 text-sm text-white">{typeof item.value === "number" ? `${item.value}%` : item.value}</div>
                           </div>
-                        ))}
+                          ))}
                       </div>
 
                       <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="rounded-[8px] border border-sky-700/30 bg-slate-950/40 p-3">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-200">Expected tags</div>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {activeDsaCalculationOutput.expectedApproachTags.length ? (
+                              activeDsaCalculationOutput.expectedApproachTags.map((item) => (
+                                <span key={item} className="rounded-full border border-sky-700/40 bg-sky-900/40 px-2 py-0.5 text-xs text-sky-50">
+                                  {item}
+                                </span>
+                              ))
+                            ) : (
+                              <span className="text-sm text-sky-100/80">Not configured</span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="rounded-[8px] border border-sky-700/30 bg-slate-950/40 p-3">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-200">AI returned tags</div>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {activeDsaCalculationOutput.aiReturnedApproachTags.length ? (
+                              activeDsaCalculationOutput.aiReturnedApproachTags.map((item) => (
+                                <span key={item} className="rounded-full border border-emerald-700/40 bg-emerald-900/40 px-2 py-0.5 text-xs text-emerald-50">
+                                  {item}
+                                </span>
+                              ))
+                            ) : (
+                              <span className="text-sm text-sky-100/80">Awaiting AI output</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* <div className="grid gap-3 sm:grid-cols-2">
                         <div className="rounded-[8px] border border-sky-700/30 bg-slate-950/40 p-3">
                           <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-200">Expected time complexity</div>
                           <div className="mt-1 text-sm text-white">{activeDsaCalculationOutput.expectedTimeComplexity}</div>
@@ -2178,7 +2274,7 @@ export function AssessmentShell({
                             Calculated space complexity: {activeDsaCalculationOutput.studentSpaceComplexityLabel}
                           </div>
                         </div>
-                      </div>
+                      </div> */}
 
                       <div className="grid gap-3 sm:grid-cols-2">
                         <div className="rounded-[8px] border border-sky-700/30 bg-slate-950/40 p-3">
@@ -2188,63 +2284,6 @@ export function AssessmentShell({
                         <div className="rounded-[8px] border border-sky-700/30 bg-slate-950/40 p-3">
                           <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-200">Hidden tests passed</div>
                           <div className="mt-1 text-sm text-white">{activeDsaCalculationOutput.hiddenTestsPassed}</div>
-                        </div>
-                      </div>
-
-                      <div className="rounded-[8px] border border-sky-700/30 bg-slate-950/40 p-3">
-                        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-200">Matched expected code</div>
-                        <div className="mt-1 flex flex-wrap gap-2">
-                          {activeDsaCalculationOutput.matchedExpectedCode.length ? (
-                            activeDsaCalculationOutput.matchedExpectedCode.map((item) => (
-                              <span key={item} className="rounded-full border border-sky-700/40 bg-sky-900/40 px-2 py-0.5 text-xs text-sky-50">
-                                {item}
-                              </span>
-                            ))
-                          ) : (
-                            <span className="text-sm text-sky-100/80">None matched</span>
-                          )}
-                        </div>
-                        <div className="mt-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-200">Missing expected code</div>
-                        <div className="mt-1 flex flex-wrap gap-2">
-                          {activeDsaCalculationOutput.missingExpectedCode.length ? (
-                            activeDsaCalculationOutput.missingExpectedCode.map((item) => (
-                              <span key={item} className="rounded-full border border-rose-700/40 bg-rose-900/30 px-2 py-0.5 text-xs text-rose-50">
-                                {item}
-                              </span>
-                            ))
-                          ) : (
-                            <span className="text-sm text-sky-100/80">None missing</span>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="rounded-[8px] border border-sky-700/30 bg-slate-950/40 p-3">
-                        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-200">Expected approach</div>
-                        <div className="mt-1 flex flex-wrap gap-2">
-                          {activeDsaCalculationOutput.expectedApproach.length ? (
-                            activeDsaCalculationOutput.expectedApproach.map((item) => (
-                              <span key={item} className="rounded-full border border-sky-700/40 bg-sky-900/40 px-2 py-0.5 text-xs text-sky-50">
-                                {item}
-                              </span>
-                            ))
-                          ) : (
-                            <span className="text-sm text-sky-100/80">Not configured</span>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="rounded-[8px] border border-sky-700/30 bg-slate-950/40 p-3">
-                        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-200">Expected code markers</div>
-                        <div className="mt-1 flex flex-wrap gap-2">
-                          {activeDsaCalculationOutput.expectedCode.length ? (
-                            activeDsaCalculationOutput.expectedCode.map((item) => (
-                              <span key={item} className="rounded-full border border-sky-700/40 bg-sky-900/40 px-2 py-0.5 text-xs text-sky-50">
-                                {item}
-                              </span>
-                            ))
-                          ) : (
-                            <span className="text-sm text-sky-100/80">Not configured</span>
-                          )}
                         </div>
                       </div>
 
