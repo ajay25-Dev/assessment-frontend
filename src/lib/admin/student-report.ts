@@ -62,6 +62,7 @@ export type QuestionAttemptRow = {
 };
 
 export type QuestionEvaluationRow = {
+  attempt_id?: string | null;
   question_id: string;
   section: string;
   deterministic_score: number | null;

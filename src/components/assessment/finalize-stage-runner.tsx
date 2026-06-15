@@ -1,25 +1,36 @@
 "use client";
 
 import { useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase-browser";
 
 const stages = ["DSA", "SQL", "OOPs", "MCQ", "DASHBOARD"] as const;
 
-export function FinalizeStageRunner({ attemptId }: { attemptId: string }) {
+export function FinalizeStageRunner({
+  attemptId,
+  fallbackPayload,
+}: {
+  attemptId: string;
+  fallbackPayload?: Record<string, unknown> | null;
+}) {
+  const router = useRouter();
+
   useEffect(() => {
     let cancelled = false;
 
     async function processStages() {
       const storageKey = `assessment-finalize:${attemptId}`;
       const rawPayload = localStorage.getItem(storageKey);
-      if (!rawPayload) return;
+      if (!rawPayload && !fallbackPayload) return;
 
       try {
         const supabase = supabaseBrowser();
         const {
           data: { session },
         } = await supabase.auth.getSession();
-        const payload = JSON.parse(rawPayload) as Record<string, unknown>;
+        const payload = rawPayload
+          ? (JSON.parse(rawPayload) as Record<string, unknown>)
+          : fallbackPayload || {};
 
         for (const stage of stages) {
           if (cancelled) return;
@@ -42,6 +53,7 @@ export function FinalizeStageRunner({ attemptId }: { attemptId: string }) {
         }
 
         localStorage.removeItem(storageKey);
+        router.refresh();
       } catch {
         // Keep the saved payload so a later report-page visit can retry processing.
       }
@@ -52,7 +64,7 @@ export function FinalizeStageRunner({ attemptId }: { attemptId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [attemptId]);
+  }, [attemptId, fallbackPayload, router]);
 
   return null;
 }

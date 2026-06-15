@@ -37,8 +37,14 @@ type IntegrityReport = {
 };
 
 type QuestionAttemptRow = {
+  question_id?: string | null;
   section: string | null;
   status: string | null;
+  answer_text?: string | null;
+  selected_language?: string | null;
+  selected_options?: string[] | null;
+  marked_for_review?: boolean | null;
+  run_count?: number | null;
   submit_count: number | null;
 };
 
@@ -153,7 +159,9 @@ export default async function AssessmentReportPage({ searchParams }: PageProps) 
       client_metadata: {
         source_assessment_id?: string;
         integrity_status?: string;
+        integrity_source?: "tab_switch" | "camera" | null;
         integrity_message?: string;
+        integrity_event_count?: number | null;
       } | null;
     } | null);
 
@@ -161,7 +169,7 @@ export default async function AssessmentReportPage({ searchParams }: PageProps) 
 
     const { data: questionRows, error: questionError } = await serviceSupabase
       .from("student_question_attempts")
-      .select("section,status,submit_count")
+      .select("question_id,section,status,answer_text,selected_language,selected_options,marked_for_review,run_count,submit_count")
       .eq("attempt_id", attempt.id);
 
     if (questionError) {
@@ -194,9 +202,36 @@ export default async function AssessmentReportPage({ searchParams }: PageProps) 
     const isDisqualified =
       attempt.status === "disqualified" ||
       attempt.client_metadata?.integrity_status === "disqualified";
+    const fallbackAnswers = Object.fromEntries(
+      ((questionRows || []) as QuestionAttemptRow[])
+        .filter((row) => row.question_id)
+        .map((row) => [
+          String(row.question_id),
+          {
+            value: row.answer_text || "",
+            language: row.selected_language || undefined,
+            selectedOptions: row.selected_options || [],
+            marked: Boolean(row.marked_for_review),
+            runs: Number(row.run_count || 0),
+            submissions: Number(row.submit_count || 0),
+            status: row.status || "submitted",
+          },
+        ]),
+    );
+    const fallbackFinalizePayload = {
+      assessment_id: attempt.client_metadata?.source_assessment_id || undefined,
+      submitted_at: attempt.submitted_at || new Date().toISOString(),
+      submission_mode: isAutoSubmitted ? "auto" : "manual",
+      integrity_status: isDisqualified ? "disqualified" : null,
+      integrity_source: attempt.client_metadata?.integrity_source || null,
+      integrity_message: attempt.client_metadata?.integrity_message || null,
+      integrity_event_count: attempt.client_metadata?.integrity_event_count || null,
+      answers: fallbackAnswers,
+    };
 
     return (
       <>
+        <FinalizeStageRunner attemptId={attempt.id} fallbackPayload={fallbackFinalizePayload} />
         {reportHeader}
         <main className="grid min-h-dvh place-items-center bg-[#f6f8f4] px-4 py-6 text-slate-950 sm:px-6 lg:px-8">
           <section className="w-full max-w-5xl overflow-hidden rounded-[8px] border border-slate-200 bg-white shadow-sm">
