@@ -43,6 +43,7 @@ export type ProfileRow = {
   id: string;
   email: string | null;
   full_name: string | null;
+  roll_number: string | null;
 };
 
 export type QuestionAttemptRow = {

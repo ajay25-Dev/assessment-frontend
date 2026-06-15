@@ -14,6 +14,7 @@ type StudentRecord = {
   id: string | null;
   email: string | null;
   full_name: string | null;
+  roll_number: string | null;
   created_at: string | null;
 };
 
@@ -122,12 +123,14 @@ function resolveBatchId(value: string | null, batchesById: Map<string, BatchReco
 async function createStudentAccountInSupabase({
   supabase,
   fullName,
+  rollNumber,
   email,
   password,
   batchId,
 }: {
   supabase: ReturnType<typeof supabaseService>;
   fullName: string;
+  rollNumber: string;
   email: string;
   password: string;
   batchId: string | null;
@@ -138,6 +141,7 @@ async function createStudentAccountInSupabase({
     email_confirm: true,
     user_metadata: {
       full_name: fullName,
+      roll_number: rollNumber,
       role: "student",
     },
   });
@@ -150,6 +154,7 @@ async function createStudentAccountInSupabase({
     id: data.user.id,
     email,
     full_name: fullName,
+    roll_number: rollNumber,
     role: "student",
   });
 
@@ -177,12 +182,13 @@ async function createStudentAccount(formData: FormData) {
   await requireAdmin();
   const supabase = supabaseService();
   const fullName = cleanString(formData.get("full_name"));
+  const rollNumber = cleanString(formData.get("roll_number")) || "";
   const email = cleanString(formData.get("email"))?.toLowerCase();
   const password = cleanString(formData.get("password"));
   const batchId = cleanString(formData.get("batch_id"));
 
-  if (!fullName || !email || !password) {
-    redirectWithError("Name, email and password are required");
+  if (!fullName || !rollNumber || !email || !password) {
+    redirectWithError("Name, roll number, email and password are required");
   }
 
   if (password.length < 6) {
@@ -192,6 +198,7 @@ async function createStudentAccount(formData: FormData) {
   const errorMessage = await createStudentAccountInSupabase({
     supabase,
     fullName,
+    rollNumber,
     email,
     password,
     batchId,
@@ -212,22 +219,24 @@ async function updateStudentAccount(formData: FormData) {
   const supabase = supabaseService();
   const studentId = cleanString(formData.get("student_id"));
   const fullName = cleanString(formData.get("full_name"));
+  const rollNumber = cleanString(formData.get("roll_number")) || "";
   const email = cleanString(formData.get("email"))?.toLowerCase();
   const password = cleanString(formData.get("password"));
   const batchId = cleanString(formData.get("batch_id"));
 
-  if (!studentId || !fullName || !email) {
-    redirectWithError("Student ID, name and email are required");
+  if (!studentId || !fullName || !rollNumber || !email) {
+    redirectWithError("Student ID, name, roll number and email are required");
   }
 
   if (password && password.length < 6) {
     redirectWithError("Password must be at least 6 characters");
   }
 
-  const authPayload: { email: string; password?: string; user_metadata: { full_name: string; role: string } } = {
+  const authPayload: { email: string; password?: string; user_metadata: { full_name: string; roll_number: string; role: string } } = {
     email,
     user_metadata: {
       full_name: fullName,
+      roll_number: rollNumber,
       role: "student",
     },
   };
@@ -242,6 +251,7 @@ async function updateStudentAccount(formData: FormData) {
     id: studentId,
     email,
     full_name: fullName,
+    roll_number: rollNumber,
     role: "student",
   });
 
@@ -345,6 +355,7 @@ async function bulkUploadStudents(formData: FormData) {
 
   for (const [index, values] of studentRows.entries()) {
     const fullName = String(values.get("full_name") || values.get("name") || values.get("student_name") || "").trim();
+    const rollNumber = String(values.get("roll_number") || values.get("roll_no") || values.get("rollnumber") || "").trim();
     const email = String(values.get("email") || "").trim().toLowerCase();
     const password = String(values.get("password") || "").trim() || defaultPassword || "";
     const batchValue = String(values.get("batch_id") || values.get("batch") || values.get("batch_name") || "").trim();
@@ -377,6 +388,7 @@ async function bulkUploadStudents(formData: FormData) {
     const errorMessage = await createStudentAccountInSupabase({
       supabase,
       fullName,
+      rollNumber,
       email,
       password,
       batchId: resolvedBatchId,
@@ -411,7 +423,7 @@ export default async function StudentsPage({
   const [{ data: studentRows }, { data: batchRows }, { data: collegeRows }, { data: assignmentRows }] = await Promise.all([
     supabase
       .from("profiles")
-      .select("id,email,full_name,role,created_at")
+      .select("id,email,full_name,roll_number,role,created_at")
       .eq("role", "student")
       .order("created_at", { ascending: false }),
     supabase.from("batches").select("id,name,college_id,status").order("name"),
@@ -522,6 +534,15 @@ export default async function StudentsPage({
               />
             </label>
             <label className="grid gap-1 text-sm">
+              <span className="font-medium text-slate-700">Roll number</span>
+              <input
+                name="roll_number"
+                required
+                className="h-11 rounded-[12px] border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-[var(--color-primary-400)] focus:ring-4 focus:ring-[var(--color-primary-100)]"
+                placeholder="Student roll number"
+              />
+            </label>
+            <label className="grid gap-1 text-sm">
               <span className="font-medium text-slate-700">Email</span>
               <input
                 name="email"
@@ -582,6 +603,7 @@ export default async function StudentsPage({
             <p className="font-medium text-slate-900">CSV columns</p>
             <p className="mt-2 leading-6">
               Required: <span className="font-mono">full_name</span>, <span className="font-mono">email</span>. Optional:
+              <span className="font-mono"> roll_number</span>,
               <span className="font-mono"> password</span>, <span className="font-mono">batch</span>, or{" "}
               <span className="font-mono">batch_id</span>.
             </p>

@@ -8,6 +8,7 @@ type StudentRecord = {
   id: string | null;
   email: string | null;
   full_name: string | null;
+  roll_number: string | null;
   created_at: string | null;
 };
 
@@ -37,6 +38,11 @@ function displayStudentName(student: StudentRecord) {
   const email = String(student.email || "").trim();
   if (email.includes("@")) return email.split("@")[0];
   return "Unnamed";
+}
+
+function displayStudentRollNumber(student: StudentRecord) {
+  const rollNumber = String(student.roll_number || "").trim();
+  return rollNumber || "-";
 }
 
 function formatDateTime(value: string | null) {
@@ -96,6 +102,7 @@ export function StudentManagementTable({
       const collegeName = assignedBatch?.college_id ? collegeById.get(String(assignedBatch.college_id || "")) || "" : "";
       return [
         displayStudentName(student),
+        student.roll_number || "",
         student.email || "",
         assignedBatch?.name || "",
         collegeName,
@@ -162,7 +169,7 @@ export function StudentManagementTable({
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search by student name, email, batch, or college"
+              placeholder="Search by name, roll number, email, batch, or college"
               className="h-12 w-full rounded-[14px] border border-[var(--color-border-subtle)] bg-white pl-11 pr-4 text-sm text-slate-950 outline-none transition focus:border-[var(--color-primary-400)] focus:ring-4 focus:ring-[var(--color-primary-100)]"
             />
           </label>
@@ -175,16 +182,18 @@ export function StudentManagementTable({
         <div className="mt-5 hidden overflow-hidden rounded-[20px] border border-[var(--color-border-subtle)] bg-white md:block">
           <table className="w-full table-fixed text-left text-sm">
             <colgroup>
-              <col className="w-[28%]" />
-              <col className="w-[26%]" />
+              <col className="w-[24%]" />
+              <col className="w-[14%]" />
+              <col className="w-[22%]" />
               <col className="w-[16%]" />
               <col className="w-[12%]" />
               <col className="w-[8%]" />
-              <col className="w-[10%]" />
+              <col className="w-[6%]" />
             </colgroup>
             <thead className="bg-[var(--color-bg-muted)] text-slate-600">
               <tr>
                 <th className="px-4 py-3 font-medium">Student</th>
+                <th className="px-4 py-3 font-medium">Roll No.</th>
                 <th className="px-4 py-3 font-medium">Email</th>
                 <th className="px-4 py-3 font-medium">Batch</th>
                 <th className="px-4 py-3 font-medium">College</th>
@@ -207,6 +216,7 @@ export function StudentManagementTable({
                         {studentId}
                       </p>
                     </td>
+                    <td className="px-4 py-4 text-slate-600">{displayStudentRollNumber(student)}</td>
                     <td className="px-4 py-4">
                       <span className="block truncate text-slate-600" title={student.email || ""}>
                         {student.email || "-"}
@@ -237,7 +247,7 @@ export function StudentManagementTable({
               })}
               {filteredStudents.length === 0 ? (
                 <tr>
-                  <td className="px-4 py-10 text-center text-slate-500" colSpan={6}>
+                  <td className="px-4 py-10 text-center text-slate-500" colSpan={7}>
                     No students match the current search.
                   </td>
                 </tr>
@@ -258,6 +268,7 @@ export function StudentManagementTable({
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="text-base font-semibold text-slate-950">{displayStudentName(student)}</p>
+                    <p className="mt-1 text-xs text-slate-500">Roll No. {displayStudentRollNumber(student)}</p>
                     <p className="mt-1 text-xs font-mono text-slate-400">{studentId}</p>
                   </div>
                   <button
@@ -276,6 +287,13 @@ export function StudentManagementTable({
                     <div>
                       <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Email</p>
                       <p className="text-slate-700">{student.email || "-"}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3">
+                    <Users className="mt-0.5 h-4 w-4 text-[var(--color-primary-700)]" />
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Roll number</p>
+                      <p className="text-slate-700">{displayStudentRollNumber(student)}</p>
                     </div>
                   </div>
                   <div className="flex items-start gap-3">
@@ -354,6 +372,10 @@ export function StudentManagementTable({
                 <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Current college</p>
                 <p className="mt-1 font-medium text-slate-950">{selectedCollegeName || "-"}</p>
               </div>
+              <div>
+                <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Roll number</p>
+                <p className="mt-1 font-medium text-slate-950">{displayStudentRollNumber(selectedStudent)}</p>
+              </div>
             </div>
 
             <form action={updateStudentAccount} className="mt-5 grid gap-4">
@@ -366,6 +388,15 @@ export function StudentManagementTable({
                     name="full_name"
                     required
                     defaultValue={selectedStudent.full_name || ""}
+                    className="h-11 rounded-[12px] border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-[var(--color-primary-400)] focus:ring-4 focus:ring-[var(--color-primary-100)]"
+                  />
+                </label>
+                <label className="grid gap-1 text-sm">
+                  <span className="font-medium text-slate-700">Roll number</span>
+                  <input
+                    name="roll_number"
+                    required
+                    defaultValue={selectedStudent.roll_number || ""}
                     className="h-11 rounded-[12px] border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-[var(--color-primary-400)] focus:ring-4 focus:ring-[var(--color-primary-100)]"
                   />
                 </label>

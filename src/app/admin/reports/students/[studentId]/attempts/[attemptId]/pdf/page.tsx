@@ -80,7 +80,7 @@ export default async function StudentAttemptReportPdfPage({
       .eq("student_id", studentId)
       .eq("attempt_id", attemptId)
       .maybeSingle(),
-    supabase.from("profiles").select("id,email,full_name").eq("id", studentId).maybeSingle(),
+    supabase.from("profiles").select("id,email,full_name,roll_number").eq("id", studentId).maybeSingle(),
     supabase.from("batch_students").select("batch_id,student_id,created_at").eq("student_id", studentId).order("created_at", { ascending: false }),
     supabase.from("batches").select("id,name,college_id").order("name"),
     supabase.from("colleges").select("id,name").order("name"),

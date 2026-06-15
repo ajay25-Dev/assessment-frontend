@@ -41,6 +41,7 @@ type ProfileRow = {
   id: string;
   email: string | null;
   full_name: string | null;
+  roll_number: string | null;
 };
 
 type BatchStudentRow = {
@@ -74,6 +75,7 @@ type DrilldownKpi =
 
 type EnrichedReport = ReportRow & {
   student_name: string;
+  student_roll_number: string;
   student_email: string;
   batch_name: string;
   college_name: string;
@@ -82,6 +84,7 @@ type EnrichedReport = ReportRow & {
 type StudentAggregate = {
   student_id: string;
   student_name: string;
+  student_roll_number: string;
   student_email: string;
   batch_name: string;
   college_name: string;
@@ -225,7 +228,7 @@ export default async function AdminReportStudentsPage({
       )
       .order("created_at", { ascending: false })
       .limit(1000),
-    supabase.from("profiles").select("id,email,full_name"),
+    supabase.from("profiles").select("id,email,full_name,roll_number"),
     supabase.from("batch_students").select("batch_id,student_id,created_at").order("created_at", { ascending: false }),
     supabase.from("batches").select("id,name,college_id").order("name"),
     supabase.from("colleges").select("id,name").order("name"),
@@ -262,6 +265,7 @@ export default async function AdminReportStudentsPage({
       return {
         ...report,
         student_name: profile?.full_name || "Unnamed student",
+        student_roll_number: profile?.roll_number || "-",
         student_email: profile?.email || report.student_id || "-",
         batch_name: batch?.name || "-",
         college_name: collegeName,
@@ -285,6 +289,7 @@ export default async function AdminReportStudentsPage({
     return {
       student_id: studentId,
       student_name: latest.student_name,
+      student_roll_number: latest.student_roll_number,
       student_email: latest.student_email,
       batch_name: latest.batch_name,
       college_name: latest.college_name,
@@ -305,7 +310,7 @@ export default async function AdminReportStudentsPage({
 
   const filteredStudents = students.filter((student) => {
     if (queryFilter) {
-      const haystack = `${student.student_name} ${student.student_email}`.toLowerCase();
+      const haystack = `${student.student_name} ${student.student_roll_number} ${student.student_email}`.toLowerCase();
       if (!haystack.includes(queryFilter)) return false;
     }
     if (collegeFilter && student.college_name !== collegeFilter) return false;
@@ -319,7 +324,7 @@ export default async function AdminReportStudentsPage({
       if (drilldownKpi === "readiness" && normalizeText(student.latest_bucket) !== focusValue) return false;
       if (drilldownKpi === "weakness" && normalizeText(student.weakest_section) !== focusValue) return false;
       if (drilldownKpi === "training_priority" && !normalizeText(student.training_priority).includes(focusValue)) return false;
-      if (drilldownKpi === "student" && !normalizeText(`${student.student_name} ${student.student_email} ${student.student_id}`).includes(focusValue)) return false;
+      if (drilldownKpi === "student" && !normalizeText(`${student.student_name} ${student.student_roll_number} ${student.student_email} ${student.student_id}`).includes(focusValue)) return false;
     }
     return true;
   });
@@ -383,7 +388,7 @@ export default async function AdminReportStudentsPage({
             <input
               name="q"
               defaultValue={asText(params.q)}
-              placeholder="Search name or email"
+              placeholder="Search name, roll number, or email"
             className="w-full rounded-[12px] border border-slate-300 py-2 pl-9 pr-3 text-sm"
           />
           </div>
@@ -469,6 +474,7 @@ export default async function AdminReportStudentsPage({
                   <tr key={student.student_id} className="align-top">
                     <td className="px-4 py-4">
                       <p className="font-medium text-slate-950">{student.student_name}</p>
+                      <p className="mt-1 text-xs text-slate-500">{student.student_roll_number}</p>
                       <p className="mt-1 text-xs text-slate-500">{student.student_email}</p>
                       <p className="mt-1 text-xs text-slate-500">{student.college_name}</p>
                       <Link

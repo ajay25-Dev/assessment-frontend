@@ -44,6 +44,7 @@ type ProfileRow = {
   id: string;
   email: string | null;
   full_name: string | null;
+  roll_number: string | null;
 };
 
 type BatchStudentRow = {
@@ -167,7 +168,7 @@ export default async function StudentReportProfilePage({
       )
       .eq("student_id", studentId)
       .order("created_at", { ascending: false }),
-    supabase.from("profiles").select("id,email,full_name").eq("id", studentId).maybeSingle(),
+    supabase.from("profiles").select("id,email,full_name,roll_number").eq("id", studentId).maybeSingle(),
     supabase.from("batch_students").select("batch_id,student_id,created_at").eq("student_id", studentId).order("created_at", { ascending: false }),
     supabase.from("batches").select("id,name,college_id").order("name"),
     supabase.from("colleges").select("id,name").order("name"),
@@ -270,6 +271,9 @@ export default async function StudentReportProfilePage({
             <div className="flex flex-wrap gap-2 text-sm text-slate-700">
               <span className={chipSurface}>
                 {profile?.full_name || "Unnamed student"}
+              </span>
+              <span className={chipSurface}>
+                {profile?.roll_number || "No roll number"}
               </span>
               <span className={chipSurface}>
                 {profile?.email || studentId}

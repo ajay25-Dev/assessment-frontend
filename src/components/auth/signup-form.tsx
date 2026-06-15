@@ -13,6 +13,7 @@ import { supabaseBrowser } from "@/lib/supabase-browser";
 const signupSchema = z
   .object({
     fullName: z.string().trim().min(2, "Enter the student's full name"),
+    rollNumber: z.string().trim().min(1, "Enter the student's roll number"),
     email: z.string().email("Enter a valid email address"),
     password: z.string().min(6, "Password must be at least 6 characters"),
     confirmPassword: z.string().min(6, "Confirm your password"),
@@ -31,7 +32,7 @@ export function SignupForm() {
 
   const form = useForm<SignupValues>({
     resolver: zodResolver(signupSchema),
-    defaultValues: { fullName: "", email: "", password: "", confirmPassword: "" },
+    defaultValues: { fullName: "", rollNumber: "", email: "", password: "", confirmPassword: "" },
   });
 
   const onSubmit = async (values: SignupValues) => {
@@ -42,6 +43,7 @@ export function SignupForm() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           fullName: values.fullName.trim(),
+          rollNumber: values.rollNumber.trim(),
           email: values.email.trim().toLowerCase(),
           password: values.password,
         }),
@@ -105,6 +107,19 @@ export function SignupForm() {
           />
           {form.formState.errors.fullName ? (
             <span className="mt-1 block text-sm text-red-600">{form.formState.errors.fullName.message}</span>
+          ) : null}
+        </label>
+
+        <label className="block">
+          <span className="text-sm font-medium text-slate-700">Roll number</span>
+          <input
+            type="text"
+            autoComplete="off"
+            className="mt-2 h-11 w-full rounded-[8px] border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-emerald-600 focus:ring-4 focus:ring-emerald-600/10"
+            {...form.register("rollNumber")}
+          />
+          {form.formState.errors.rollNumber ? (
+            <span className="mt-1 block text-sm text-red-600">{form.formState.errors.rollNumber.message}</span>
           ) : null}
         </label>
 

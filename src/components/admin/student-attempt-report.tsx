@@ -455,6 +455,7 @@ export function StudentAttemptReport({
             </div>
             <div className="flex flex-wrap gap-2 text-sm text-slate-700">
               <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 font-medium">{profile?.full_name || "Unnamed student"}</span>
+              <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 font-medium">{profile?.roll_number || "No roll number"}</span>
               <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 font-medium">{profile?.email || studentId}</span>
               <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 font-medium">Batch: {batchName}</span>
               <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 font-medium">College: {collegeName}</span>
@@ -490,6 +491,7 @@ export function StudentAttemptReport({
           <p className="text-sm font-medium uppercase tracking-[0.14em] text-slate-500">Student Details</p>
           <div className="grid gap-2 text-sm leading-6 text-slate-700">
             <p><span className="font-semibold text-slate-900">Name:</span> {profile?.full_name || "Not available"}</p>
+            <p><span className="font-semibold text-slate-900">Roll number:</span> {profile?.roll_number || "Not available"}</p>
             <p><span className="font-semibold text-slate-900">Email:</span> {profile?.email || "Not available"}</p>
             <p><span className="font-semibold text-slate-900">Student ID:</span> {studentId}</p>
             <p><span className="font-semibold text-slate-900">College:</span> {collegeName}</p>
