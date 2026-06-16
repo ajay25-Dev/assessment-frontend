@@ -103,7 +103,7 @@ export default async function StudentAttemptReportPdfPage({
       .order("created_at", { ascending: false }),
     supabase
       .from("student_sql_runs")
-      .select("question_id,run_type,query_text,row_count,error_text,comparison_result,created_at")
+      .select("question_id,run_type,query_text,columns,rows,row_count,execution_ms,error_text,comparison_result,created_at")
       .eq("attempt_id", attemptId)
       .order("created_at", { ascending: false }),
     supabase

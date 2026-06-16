@@ -159,6 +159,39 @@ type SqlRunResponse = {
   message?: string;
 };
 
+type SqlEvaluationOutput = {
+  overall_question_score?: number;
+  result_correctness_score?: number;
+  business_logic_score?: number;
+  sql_concept_score?: number;
+  edge_case_score?: number;
+  query_efficiency_score?: number;
+  formatting_score?: number;
+  alias_score?: number;
+  structure_score?: number;
+  simplicity_score?: number;
+  readability_score?: number;
+  null_duplicate_handling_score?: number;
+  hardcoding_risk?: string;
+  query_quality_label?: string;
+  placement_readiness_label?: string;
+  ai_returned_concept_tags?: string[];
+  expected_sql_concept_tags?: string[];
+  expected_concepts_used?: string[];
+  missing_concepts?: string[];
+  detected_mistakes?: string[];
+  missing_business_rules?: string[];
+  failed_case_analysis?: string[];
+  runtime_observation?: string;
+  key_strengths?: string[];
+  key_weaknesses?: string[];
+  improvement_recommendation?: string;
+};
+
+type SqlEvaluationResponse = {
+  output?: SqlEvaluationOutput | null;
+};
+
 function sameStringSet(left: string[], right: string[]) {
   if (left.length !== right.length) return false;
   const rightSet = new Set(right);
@@ -265,24 +298,6 @@ function rankGapScore(expectedRank: number, studentRank: number) {
   return Math.max(0, 100 - gap * 10);
 }
 
-function benchmarkScore(actual: number | null | undefined, ideal: number | null | undefined) {
-  const actualValue = typeof actual === "number" ? actual : Number(actual);
-  const idealValue = typeof ideal === "number" ? ideal : Number(ideal);
-
-  if (!Number.isFinite(actualValue) || !Number.isFinite(idealValue) || idealValue <= 0 || actualValue <= 0) {
-    return "Not available";
-  }
-
-  return Math.max(0, Math.min(100, Math.round((idealValue / actualValue) * 100)));
-}
-
-function parseExecutionTimeMs(value: string | null) {
-  if (typeof value !== "string") return null;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 0) return null;
-  return Math.round(parsed * 1000);
-}
-
 function complexityRankLabelLocal(rank: number | "Not available") {
   if (typeof rank !== "number") return "Not available";
   if (rank <= 1) return "O(1)";
@@ -333,6 +348,16 @@ function initialAnswer(question: AssessmentQuestion): AnswerState {
   };
 }
 
+function scoreToText(value: unknown) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return "Not available";
+  return `${Math.max(0, Math.min(100, Math.round(parsed)))}%`;
+}
+
+function textList(value: unknown) {
+  return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : [];
+}
+
 function stripTransientAnswerData(answer: AnswerState): AnswerState {
   return {
     ...answer,
@@ -352,6 +377,7 @@ function buildTemporaryScorePreview(
   question: AssessmentQuestion,
   answer: AnswerState,
   testResults: TestResultsOutput | null,
+  sqlEvaluation: SqlEvaluationOutput | null = null,
 ): TemporaryScorePreview | null {
   const updatedAt = new Date().toISOString();
 
@@ -405,6 +431,18 @@ function buildTemporaryScorePreview(
       score: isExactMatch ? "100%" : "0%",
       detail: `${answer.selectedOptions.length}/${correctOptions.length} option(s) matched`,
       note: "Computed locally from the MCQ answer key. Local preview is not saved.",
+      updatedAt,
+    };
+  }
+
+  if (question.engine === "sql" && sqlEvaluation?.overall_question_score !== undefined) {
+    return {
+      label: "SQL score preview",
+      score: scoreToText(sqlEvaluation.overall_question_score),
+      detail: sqlEvaluation.query_quality_label || "SQL submission scored successfully.",
+      note: sqlEvaluation.placement_readiness_label
+        ? `Placement readiness: ${sqlEvaluation.placement_readiness_label}.`
+        : "Computed from the live SQL result and visible expected rows.",
       updatedAt,
     };
   }
@@ -483,18 +521,16 @@ function buildDsaCalculationOutput(
   const expectedSpaceComplexity = String(
     backendOutput.expected_space_complexity || question.expected_space_complexity || "Not available",
   );
-  const idealTime = Number(question.ideal_time);
-  const idealSpace = Number(question.ideal_space);
-  const executionTimeMs = parseExecutionTimeMs(answer.executionTime);
-  const executionMemoryKb = typeof answer.executionMemory === "number"
-    ? answer.executionMemory
-    : Number(answer.executionMemory);
   const expectedTimeComplexityRank = typeof backendOutput.expected_time_complexity_rank === "number"
     ? backendOutput.expected_time_complexity_rank
-    : "Not available";
+    : expectedTimeComplexity !== "Not available"
+      ? resolveComplexityRankLocal(expectedTimeComplexity)
+      : "Not available";
   const expectedSpaceComplexityRank = typeof backendOutput.expected_space_complexity_rank === "number"
     ? backendOutput.expected_space_complexity_rank
-    : "Not available";
+    : expectedSpaceComplexity !== "Not available"
+      ? resolveComplexityRankLocal(expectedSpaceComplexity)
+      : "Not available";
   const expectedTimeComplexityLabel = String(
     backendOutput.expected_time_complexity_label || (expectedTimeComplexityRank !== "Not available" ? `Rank ${expectedTimeComplexityRank}` : "AI evaluation pending"),
   );
@@ -503,10 +539,14 @@ function buildDsaCalculationOutput(
   );
   const studentTimeComplexityRank = typeof backendOutput.student_time_complexity_rank === "number"
     ? backendOutput.student_time_complexity_rank
-    : "Not available";
+    : hasDsaAttempt
+      ? inferStudentComplexityRank(code)
+      : "Not available";
   const studentSpaceComplexityRank = typeof backendOutput.student_space_complexity_rank === "number"
     ? backendOutput.student_space_complexity_rank
-    : "Not available";
+    : hasDsaAttempt
+      ? inferStudentComplexityRank(code)
+      : "Not available";
   const studentTimeComplexityLabel = String(
     backendOutput.student_time_complexity_label || (studentTimeComplexityRank !== "Not available" ? `Rank ${studentTimeComplexityRank}` : "AI evaluation pending"),
   );
@@ -532,14 +572,14 @@ function buildDsaCalculationOutput(
   const timeComplexityScore =
     hasDsaAttempt && typeof backendOutput.time_complexity_score === "number"
       ? backendOutput.time_complexity_score
-      : hasDsaAttempt
-        ? benchmarkScore(executionTimeMs, idealTime)
+      : typeof expectedTimeComplexityRank === "number" && typeof studentTimeComplexityRank === "number"
+        ? rankGapScore(expectedTimeComplexityRank, studentTimeComplexityRank)
         : "Not available";
   const spaceComplexityScore =
     hasDsaAttempt && typeof backendOutput.space_complexity_score === "number"
       ? backendOutput.space_complexity_score
-      : hasDsaAttempt
-        ? benchmarkScore(executionMemoryKb, idealSpace)
+      : typeof expectedSpaceComplexityRank === "number" && typeof studentSpaceComplexityRank === "number"
+        ? rankGapScore(expectedSpaceComplexityRank, studentSpaceComplexityRank)
         : "Not available";
   const edgeCaseCandidates = results.filter((test) =>
     /(edge|boundary|empty|duplicate|null|zero|single|large|cycle|self|same)/i.test(
@@ -863,6 +903,7 @@ export function AssessmentShell({
     }
   });
   const [sqlResult, setSqlResult] = useState<SqlRunResponse | null>(null);
+  const [sqlEvaluationByQuestion, setSqlEvaluationByQuestion] = useState<Record<string, SqlEvaluationOutput | null>>({});
   const [testResults, setTestResults] = useState<TestResultsOutput | null>(null);
   const [temporaryScorePreviewByQuestion, setTemporaryScorePreviewByQuestion] = useState<Record<string, TemporaryScorePreview | null>>({});
   const [animatingTestIndex, setAnimatingTestIndex] = useState<number>(-1);
@@ -880,6 +921,7 @@ export function AssessmentShell({
     .findIndex((question) => question.id === activeQuestion.id);
   const activeSectionQuestionNumber = activeSectionQuestionIndex >= 0 ? activeSectionQuestionIndex + 1 : activeIndex + 1;
   const activeTemporaryScorePreview = temporaryScorePreviewByQuestion[activeQuestion.id];
+  const activeSqlEvaluationOutput = sqlEvaluationByQuestion[activeQuestion.id] || null;
   const activeDsaCalculationOutput = buildDsaCalculationOutput(
     activeQuestion,
     activeAnswer,
@@ -1413,6 +1455,10 @@ export function AssessmentShell({
       sqlResult: null,
     });
     setSqlResult(null);
+    setSqlEvaluationByQuestion((current) => ({
+      ...current,
+      [activeQuestion.id]: null,
+    }));
     setActiveTab("results");
     scrollToResults();
 
@@ -1436,10 +1482,6 @@ export function AssessmentShell({
       }
 
       setSqlResult(payload);
-      setTemporaryScorePreviewByQuestion((current) => ({
-        ...current,
-        [activeQuestion.id]: buildTemporaryScorePreview(activeQuestion, activeAnswer, null),
-      }));
       const resultMessage = payload?.error
         ? `SQL error:\n${payload.error}`
         : `SQL completed. Rows: ${payload?.row_count ?? 0}. Execution: ${payload?.execution_ms ?? 0} ms.`;
@@ -1452,6 +1494,60 @@ export function AssessmentShell({
         resultMessage,
         sqlResult: payload || null,
       };
+
+      if (action === "submit") {
+        try {
+          const evaluationResponse = await fetch("/api/evaluations/sql", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              question_id: activeQuestion.id,
+              question_title: activeQuestion.title,
+              submitted_query: activeAnswer.value,
+              visible_expected_rows: activeQuestion.visible_expected_rows || [],
+              expected_columns: activeQuestion.expected_columns || [],
+              result_match: activeQuestion.result_match || { order_matters: false, numeric_tolerance: 0.01 },
+              required_business_rules: activeQuestion.required_business_rules || [],
+              expected_sql_concepts: activeQuestion.expected_sql_concepts || [],
+              expected_sql_concept_tags: activeQuestion.expected_sql_concept_tags || activeQuestion.expected_sql_concepts || [],
+              edge_cases: activeQuestion.edge_cases || [],
+              null_rules: activeQuestion.null_rules || [],
+              duplicate_rules: activeQuestion.duplicate_rules || [],
+              sql_result_columns: payload?.columns || [],
+              sql_result_rows: payload?.rows || [],
+              sql_result_row_count: payload?.row_count || 0,
+              sql_result_error: payload?.error || "",
+              runtime_observation: payload?.error
+                ? `SQL error: ${payload.error}`
+                : `Returned ${payload?.row_count ?? 0} row(s) in ${payload?.execution_ms ?? 0} ms.`,
+              execution_ms: payload?.execution_ms ?? null,
+              error: payload?.error || "",
+            }),
+          });
+          const evaluationPayload = (await evaluationResponse.json().catch(() => null)) as SqlEvaluationResponse | null;
+          const evaluationOutput = evaluationPayload?.output || null;
+          setSqlEvaluationByQuestion((current) => ({
+            ...current,
+            [activeQuestion.id]: evaluationOutput,
+          }));
+          setTemporaryScorePreviewByQuestion((current) => ({
+            ...current,
+            [activeQuestion.id]: buildTemporaryScorePreview(activeQuestion, activeAnswer, null, evaluationOutput),
+          }));
+        } catch (evaluationError) {
+          console.warn("Failed to compute SQL preview", evaluationError);
+          setTemporaryScorePreviewByQuestion((current) => ({
+            ...current,
+            [activeQuestion.id]: buildTemporaryScorePreview(activeQuestion, activeAnswer, null),
+          }));
+        }
+      } else {
+        setTemporaryScorePreviewByQuestion((current) => ({
+          ...current,
+          [activeQuestion.id]: buildTemporaryScorePreview(activeQuestion, activeAnswer, null),
+        }));
+      }
+
       if (action === "submit") {
         try {
           await persistQuestionSubmission(nextAnswer, null);
@@ -1462,6 +1558,10 @@ export function AssessmentShell({
       updateActiveAnswer(nextAnswer);
     } catch (error) {
       setSqlResult(null);
+      setSqlEvaluationByQuestion((current) => ({
+        ...current,
+        [activeQuestion.id]: null,
+      }));
       setTemporaryScorePreviewByQuestion((current) => ({
         ...current,
         [activeQuestion.id]: buildTemporaryScorePreview(activeQuestion, activeAnswer, null),
@@ -2210,6 +2310,116 @@ export function AssessmentShell({
                       : [{ status: sqlResult?.error ? "error" : "info", message: activeAnswer.resultMessage }]
                   }
                 />
+              ) : null}
+              {activeQuestion.engine === "sql" && activeSqlEvaluationOutput ? (
+                <div className="rounded-[10px] border border-sky-700/40 bg-sky-950/20 p-3 text-sm leading-6 text-sky-50">
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-sky-200">
+                    <span>SQL calculated output</span>
+                    <span>{scoreToText(activeSqlEvaluationOutput.overall_question_score)}</span>
+                  </div>
+                  <div className="grid gap-3 lg:grid-cols-[minmax(160px,220px)_1fr]">
+                    <div>
+                      <div className="text-3xl font-semibold text-white">
+                        {scoreToText(activeSqlEvaluationOutput.overall_question_score)}
+                      </div>
+                      <div className="mt-1 text-sm text-sky-100">
+                        {activeSqlEvaluationOutput.query_quality_label || "SQL submission scored successfully."}
+                      </div>
+                      <div className="mt-2 text-xs leading-5 text-sky-100/80">
+                        {activeSqlEvaluationOutput.placement_readiness_label || "Placement readiness not available."}
+                      </div>
+                    </div>
+                    <div className="grid gap-3">
+                      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                        {[
+                          { label: "Result correctness", value: activeSqlEvaluationOutput.result_correctness_score },
+                          { label: "Business logic", value: activeSqlEvaluationOutput.business_logic_score },
+                          { label: "SQL concepts", value: activeSqlEvaluationOutput.sql_concept_score },
+                          { label: "Edge cases", value: activeSqlEvaluationOutput.edge_case_score },
+                          { label: "Query efficiency", value: activeSqlEvaluationOutput.query_efficiency_score },
+                          { label: "Readability", value: activeSqlEvaluationOutput.readability_score },
+                          { label: "NULL / duplicate handling", value: activeSqlEvaluationOutput.null_duplicate_handling_score },
+                          { label: "Formatting", value: activeSqlEvaluationOutput.formatting_score },
+                          { label: "Alias", value: activeSqlEvaluationOutput.alias_score },
+                          { label: "Structure", value: activeSqlEvaluationOutput.structure_score },
+                          { label: "Simplicity", value: activeSqlEvaluationOutput.simplicity_score },
+                          { label: "Overall question score", value: activeSqlEvaluationOutput.overall_question_score },
+                        ].map((item) => (
+                          <div key={item.label} className="rounded-[8px] border border-sky-700/30 bg-slate-950/40 p-3">
+                            <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-200">{item.label}</div>
+                            <div className="mt-1 text-sm text-white">
+                              {typeof item.value === "number" ? `${Math.max(0, Math.min(100, Math.round(item.value)))}%` : "Not available"}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="rounded-[8px] border border-sky-700/30 bg-slate-950/40 p-3">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-200">Expected concept tags</div>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {textList(activeSqlEvaluationOutput.expected_sql_concept_tags).length ? (
+                              textList(activeSqlEvaluationOutput.expected_sql_concept_tags).map((item) => (
+                                <span key={item} className="rounded-full border border-sky-700/40 bg-sky-900/40 px-2 py-0.5 text-xs text-sky-50">
+                                  {item}
+                                </span>
+                              ))
+                            ) : (
+                              <span className="text-sm text-sky-100/80">Not available</span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="rounded-[8px] border border-sky-700/30 bg-slate-950/40 p-3">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-200">AI returned concept tags</div>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {textList(activeSqlEvaluationOutput.ai_returned_concept_tags).length ? (
+                              textList(activeSqlEvaluationOutput.ai_returned_concept_tags).map((item) => (
+                                <span key={item} className="rounded-full border border-emerald-700/40 bg-emerald-900/30 px-2 py-0.5 text-xs text-emerald-50">
+                                  {item}
+                                </span>
+                              ))
+                            ) : (
+                              <span className="text-sm text-sky-100/80">Not available</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="rounded-[8px] border border-sky-700/30 bg-slate-950/40 p-3">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-200">Missing concepts</div>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {textList(activeSqlEvaluationOutput.missing_concepts).length ? (
+                              textList(activeSqlEvaluationOutput.missing_concepts).map((item) => (
+                                <span key={item} className="rounded-full border border-amber-700/40 bg-amber-900/30 px-2 py-0.5 text-xs text-amber-50">
+                                  {item}
+                                </span>
+                              ))
+                            ) : (
+                              <span className="text-sm text-sky-100/80">Not available</span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="rounded-[8px] border border-sky-700/30 bg-slate-950/40 p-3">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-200">Detected mistakes</div>
+                          <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-sky-50">
+                            {textList(activeSqlEvaluationOutput.detected_mistakes).length ? (
+                              textList(activeSqlEvaluationOutput.detected_mistakes).map((item) => <li key={item}>{item}</li>)
+                            ) : (
+                              <li>Not available</li>
+                            )}
+                          </ul>
+                        </div>
+                        <div className="rounded-[8px] border border-sky-700/30 bg-slate-950/40 p-3">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-200">Improvement recommendation</div>
+                          <div className="mt-1 text-sm text-sky-50">
+                            {activeSqlEvaluationOutput.improvement_recommendation || "Not available"}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               ) : null}
               {activeTemporaryScorePreview ? (
                 <div className="rounded-[10px] border border-emerald-700/40 bg-emerald-950/20 p-3 text-sm leading-6 text-emerald-50">

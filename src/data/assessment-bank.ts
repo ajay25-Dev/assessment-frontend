@@ -66,6 +66,17 @@ export type AssessmentQuestion = {
   starter_code?: Record<string, string>;
   dialect?: string;
   expected_columns?: string[];
+  visible_expected_rows?: unknown[];
+  result_match?: {
+    order_matters?: boolean;
+    numeric_tolerance?: number;
+  };
+  required_business_rules?: string[];
+  expected_sql_concepts?: string[];
+  expected_sql_concept_tags?: string[];
+  edge_cases?: string[];
+  null_rules?: string[];
+  duplicate_rules?: string[];
   sample_data_sql?: string;
   sample_data_tables?: Array<{
     name: string;
