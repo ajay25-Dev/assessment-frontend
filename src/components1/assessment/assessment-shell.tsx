@@ -1134,9 +1134,9 @@ function TestResultsPanel({
               <span className="font-semibold text-slate-600 flex items-center">
                 {test.number}
               </span>
-              <div className="truncate" title={test.input}>
+              <div className="min-w-0 whitespace-normal break-words" title={test.input}>
                 <span className="text-slate-500">Input: </span>
-                <code className="font-mono text-slate-800">{test.input.length > 30 ? test.input.substring(0, 30) + "..." : test.input}</code>
+                <code className="font-mono text-slate-800">{test.input}</code>
               </div>
               <div className="truncate" title={test.expected}>
                 <span className="text-slate-500">Expected: </span>

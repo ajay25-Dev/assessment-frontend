@@ -47,6 +47,7 @@ export type AssessmentQuestion = {
     expected?: string;
     expected_output: string;
     purpose: string;
+    tags?: string[];
   }>;
   open_test_cases?: Array<{
     number: number;
@@ -54,6 +55,7 @@ export type AssessmentQuestion = {
     expected?: string;
     expected_output: string;
     purpose: string;
+    tags?: string[];
   }>;
   hidden_test_cases?: Array<{
     number: number;
@@ -61,6 +63,7 @@ export type AssessmentQuestion = {
     expected?: string;
     expected_output: string;
     purpose: string;
+    tags?: string[];
   }>;
   allowed_languages?: string[];
   starter_code?: Record<string, string>;

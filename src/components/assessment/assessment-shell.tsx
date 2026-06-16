@@ -130,6 +130,33 @@ type DsaCalculationOutput = {
   updatedAt: string;
 };
 
+type OopsCalculationOutput = {
+  score: string;
+  classDesignScore: number | "Not available";
+  abstractionScore: number | "Not available";
+  encapsulationScore: number | "Not available";
+  polymorphismScore: number | "Not available";
+  extensibilityScore: number | "Not available";
+  separationOfConcernsScore: number | "Not available";
+  solidPrinciplesScore: number | "Not available";
+  errorHandlingScore: number | "Not available";
+  codeReadabilityScore: number | "Not available";
+  designPatternAwarenessScore: number | "Not available";
+  overallQuestionScore: number | "Not available";
+  designMaturityLabel: string;
+  placementReadinessLabel: string;
+  identifiedClasses: string[];
+  identifiedInterfacesOrAbstractions: string[];
+  designPatternsDetected: string[];
+  missingComponents: string[];
+  redFlags: string[];
+  keyStrengths: string[];
+  keyWeaknesses: string[];
+  improvementRecommendation: string;
+  note: string;
+  updatedAt: string;
+};
+
 type IntegrityViolation = {
   eventCount: number;
   message: string;
@@ -378,10 +405,28 @@ function buildTemporaryScorePreview(
   answer: AnswerState,
   testResults: TestResultsOutput | null,
   sqlEvaluation: SqlEvaluationOutput | null = null,
+  backendEvaluation: Record<string, unknown> | null = null,
 ): TemporaryScorePreview | null {
   const updatedAt = new Date().toISOString();
 
   if (question.engine === "code") {
+    if (
+      question.section === "OOPs" &&
+      typeof backendEvaluation?.overall_question_score === "number"
+    ) {
+      return {
+        label: "OOPs score preview",
+        score: scoreToText(backendEvaluation.overall_question_score),
+        detail: String(
+          backendEvaluation.design_maturity_label || "OOPs submission scored successfully.",
+        ),
+        note: backendEvaluation.placement_readiness_label
+          ? `Placement readiness: ${backendEvaluation.placement_readiness_label}.`
+          : "Computed from structured OOPs test cases and tag coverage.",
+        updatedAt,
+      };
+    }
+
     if (!testResults?.total) {
       return {
         label: "Temporary score preview",
@@ -647,6 +692,87 @@ function buildDsaCalculationOutput(
   };
 }
 
+function buildOopsCalculationOutput(
+  question: AssessmentQuestion,
+  _answer: AnswerState,
+  backendEvaluation: Record<string, unknown> | null = null,
+): OopsCalculationOutput | null {
+  if (question.section !== "OOPs" || question.engine !== "code") return null;
+
+  const backendOutput = backendEvaluation || {};
+  const overallQuestionScore =
+    typeof backendOutput.overall_question_score === "number"
+      ? backendOutput.overall_question_score
+      : "Not available";
+
+  return {
+    score: scoreToText(overallQuestionScore),
+    classDesignScore:
+      typeof backendOutput.class_design_score === "number"
+        ? backendOutput.class_design_score
+        : "Not available",
+    abstractionScore:
+      typeof backendOutput.abstraction_score === "number"
+        ? backendOutput.abstraction_score
+        : "Not available",
+    encapsulationScore:
+      typeof backendOutput.encapsulation_score === "number"
+        ? backendOutput.encapsulation_score
+        : "Not available",
+    polymorphismScore:
+      typeof backendOutput.polymorphism_score === "number"
+        ? backendOutput.polymorphism_score
+        : "Not available",
+    extensibilityScore:
+      typeof backendOutput.extensibility_score === "number"
+        ? backendOutput.extensibility_score
+        : "Not available",
+    separationOfConcernsScore:
+      typeof backendOutput.separation_of_concerns_score === "number"
+        ? backendOutput.separation_of_concerns_score
+        : "Not available",
+    solidPrinciplesScore:
+      typeof backendOutput.solid_principles_score === "number"
+        ? backendOutput.solid_principles_score
+        : "Not available",
+    errorHandlingScore:
+      typeof backendOutput.error_handling_score === "number"
+        ? backendOutput.error_handling_score
+        : "Not available",
+    codeReadabilityScore:
+      typeof backendOutput.code_readability_score === "number"
+        ? backendOutput.code_readability_score
+        : "Not available",
+    designPatternAwarenessScore:
+      typeof backendOutput.design_pattern_awareness_score === "number"
+        ? backendOutput.design_pattern_awareness_score
+        : "Not available",
+    overallQuestionScore,
+    designMaturityLabel: String(
+      backendOutput.design_maturity_label || "OOPs submission scored successfully.",
+    ),
+    placementReadinessLabel: String(
+      backendOutput.placement_readiness_label || "Placement readiness not available.",
+    ),
+    identifiedClasses: stringList(backendOutput.identified_classes),
+    identifiedInterfacesOrAbstractions: stringList(
+      backendOutput.identified_interfaces_or_abstractions,
+    ),
+    designPatternsDetected: stringList(backendOutput.design_patterns_detected),
+    missingComponents: stringList(backendOutput.missing_components),
+    redFlags: stringList(backendOutput.red_flags),
+    keyStrengths: stringList(backendOutput.key_strengths),
+    keyWeaknesses: stringList(backendOutput.key_weaknesses),
+    improvementRecommendation: String(
+      backendOutput.improvement_recommendation || "Not available",
+    ),
+    note: backendOutput.placement_readiness_label
+      ? `Placement readiness: ${backendOutput.placement_readiness_label}.`
+      : "Computed from structured OOPs test-case output and tag coverage.",
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 function formatTime(totalSeconds: number) {
   const safe = Math.max(0, totalSeconds);
   const hours = Math.floor(safe / 3600);
@@ -906,6 +1032,7 @@ export function AssessmentShell({
   const [sqlEvaluationByQuestion, setSqlEvaluationByQuestion] = useState<Record<string, SqlEvaluationOutput | null>>({});
   const [testResults, setTestResults] = useState<TestResultsOutput | null>(null);
   const [temporaryScorePreviewByQuestion, setTemporaryScorePreviewByQuestion] = useState<Record<string, TemporaryScorePreview | null>>({});
+  const [persistedOopsEvaluationByQuestion, setPersistedOopsEvaluationByQuestion] = useState<Record<string, Record<string, unknown> | null>>({});
   const [animatingTestIndex, setAnimatingTestIndex] = useState<number>(-1);
   const resultsRef = useRef<HTMLDivElement>(null);
   const cameraVideoRef = useRef<HTMLVideoElement>(null);
@@ -922,6 +1049,11 @@ export function AssessmentShell({
   const activeSectionQuestionNumber = activeSectionQuestionIndex >= 0 ? activeSectionQuestionIndex + 1 : activeIndex + 1;
   const activeTemporaryScorePreview = temporaryScorePreviewByQuestion[activeQuestion.id];
   const activeSqlEvaluationOutput = sqlEvaluationByQuestion[activeQuestion.id] || null;
+  const activeOopsCalculationOutput = buildOopsCalculationOutput(
+    activeQuestion,
+    activeAnswer,
+    persistedOopsEvaluationByQuestion[activeQuestion.id] || null,
+  );
   const activeDsaCalculationOutput = buildDsaCalculationOutput(
     activeQuestion,
     activeAnswer,
@@ -1289,6 +1421,23 @@ export function AssessmentShell({
         [activeQuestion.id]: payload.evaluation?.output || null,
       }));
     }
+
+    if (activeQuestion.section === "OOPs" && payload?.evaluation?.output) {
+      setPersistedOopsEvaluationByQuestion((current) => ({
+        ...current,
+        [activeQuestion.id]: payload.evaluation?.output || null,
+      }));
+      setTemporaryScorePreviewByQuestion((current) => ({
+        ...current,
+        [activeQuestion.id]: buildTemporaryScorePreview(
+          activeQuestion,
+          nextAnswer,
+          null,
+          null,
+          payload.evaluation?.output || null,
+        ),
+      }));
+    }
   }
 
   async function executeCode(action: "run" | "submit") {
@@ -1362,7 +1511,10 @@ export function AssessmentShell({
         }
         setAnimatingTestIndex(-1);
 
-        const resultMessage = "Code submission completed. Review the temporary score preview below.";
+        const resultMessage =
+          activeQuestion.section === "OOPs"
+            ? "Code submission completed. Review the OOPs score preview below."
+            : "Code submission completed. Review the temporary score preview below.";
         const nextRuns = action === "run" ? activeAnswer.runs + 1 : activeAnswer.runs;
         const nextSubmissions = action === "submit" ? activeAnswer.submissions + 1 : activeAnswer.submissions;
         const nextAnswer: AnswerState = {
@@ -2574,6 +2726,156 @@ export function AssessmentShell({
                   </div>
                 </div>
               ) : null}
+              {activeOopsCalculationOutput ? (
+                <div className="rounded-[10px] border border-violet-700/40 bg-violet-950/20 p-3 text-sm leading-6 text-violet-50">
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-violet-200">
+                    <span>OOPs calculated output</span>
+                    <span>{new Date(activeOopsCalculationOutput.updatedAt).toLocaleTimeString([], {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}</span>
+                  </div>
+                  <div className="grid gap-3 lg:grid-cols-[minmax(160px,220px)_1fr]">
+                    <div>
+                      <div className="text-3xl font-semibold text-white">{activeOopsCalculationOutput.score}</div>
+                      <div className="mt-1 text-sm text-violet-100">{activeOopsCalculationOutput.designMaturityLabel}</div>
+                      <div className="mt-2 text-xs leading-5 text-violet-100/80">{activeOopsCalculationOutput.note}</div>
+                      <div className="mt-3 rounded-[8px] border border-violet-700/30 bg-slate-950/40 px-3 py-2 text-xs leading-5 text-violet-100/80">
+                        {activeOopsCalculationOutput.improvementRecommendation}
+                      </div>
+                    </div>
+                    <div className="grid gap-3">
+                      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                        {[
+                          { label: "Class design", value: activeOopsCalculationOutput.classDesignScore },
+                          { label: "Abstraction", value: activeOopsCalculationOutput.abstractionScore },
+                          { label: "Encapsulation", value: activeOopsCalculationOutput.encapsulationScore },
+                          { label: "Polymorphism", value: activeOopsCalculationOutput.polymorphismScore },
+                          { label: "SOLID principles", value: activeOopsCalculationOutput.solidPrinciplesScore },
+                          { label: "Error handling", value: activeOopsCalculationOutput.errorHandlingScore },
+                          { label: "Code readability", value: activeOopsCalculationOutput.codeReadabilityScore },
+                          { label: "Design pattern awareness", value: activeOopsCalculationOutput.designPatternAwarenessScore },
+                          { label: "Overall question score", value: activeOopsCalculationOutput.overallQuestionScore },
+                        ].map((item) => (
+                          <div key={item.label} className="rounded-[8px] border border-violet-700/30 bg-slate-950/40 p-3">
+                            <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-violet-200">{item.label}</div>
+                            <div className="mt-1 text-sm text-white">
+                              {typeof item.value === "number" ? `${Math.max(0, Math.min(100, Math.round(item.value)))}%` : item.value}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="rounded-[8px] border border-violet-700/30 bg-slate-950/40 p-3">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-violet-200">Identified classes</div>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {activeOopsCalculationOutput.identifiedClasses.length ? (
+                              activeOopsCalculationOutput.identifiedClasses.map((item) => (
+                                <span key={item} className="rounded-full border border-violet-700/40 bg-violet-900/30 px-2 py-0.5 text-xs text-violet-50">
+                                  {item}
+                                </span>
+                              ))
+                            ) : (
+                              <span className="text-sm text-violet-100/80">Not available</span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="rounded-[8px] border border-violet-700/30 bg-slate-950/40 p-3">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-violet-200">Identified abstractions</div>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {activeOopsCalculationOutput.identifiedInterfacesOrAbstractions.length ? (
+                              activeOopsCalculationOutput.identifiedInterfacesOrAbstractions.map((item) => (
+                                <span key={item} className="rounded-full border border-violet-700/40 bg-violet-900/30 px-2 py-0.5 text-xs text-violet-50">
+                                  {item}
+                                </span>
+                              ))
+                            ) : (
+                              <span className="text-sm text-violet-100/80">Not available</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="rounded-[8px] border border-violet-700/30 bg-slate-950/40 p-3">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-violet-200">Design patterns detected</div>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {activeOopsCalculationOutput.designPatternsDetected.length ? (
+                              activeOopsCalculationOutput.designPatternsDetected.map((item) => (
+                                <span key={item} className="rounded-full border border-violet-700/40 bg-violet-900/30 px-2 py-0.5 text-xs text-violet-50">
+                                  {item}
+                                </span>
+                              ))
+                            ) : (
+                              <span className="text-sm text-violet-100/80">Not available</span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="rounded-[8px] border border-violet-700/30 bg-slate-950/40 p-3">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-violet-200">Placement readiness</div>
+                          <div className="mt-1 text-sm text-white">{activeOopsCalculationOutput.placementReadinessLabel}</div>
+                          <div className="mt-2 text-xs leading-5 text-violet-100/80">{activeOopsCalculationOutput.keyStrengths.length ? activeOopsCalculationOutput.keyStrengths[0] : "No key strengths available."}</div>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="rounded-[8px] border border-violet-700/30 bg-slate-950/40 p-3">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-violet-200">Missing components</div>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {activeOopsCalculationOutput.missingComponents.length ? (
+                              activeOopsCalculationOutput.missingComponents.map((item) => (
+                                <span key={item} className="rounded-full border border-amber-700/40 bg-amber-900/30 px-2 py-0.5 text-xs text-amber-50">
+                                  {item}
+                                </span>
+                              ))
+                            ) : (
+                              <span className="text-sm text-violet-100/80">Not available</span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="rounded-[8px] border border-violet-700/30 bg-slate-950/40 p-3">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-violet-200">Red flags</div>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {activeOopsCalculationOutput.redFlags.length ? (
+                              activeOopsCalculationOutput.redFlags.map((item) => (
+                                <span key={item} className="rounded-full border border-rose-700/40 bg-rose-900/30 px-2 py-0.5 text-xs text-rose-50">
+                                  {item}
+                                </span>
+                              ))
+                            ) : (
+                              <span className="text-sm text-violet-100/80">Not available</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="rounded-[8px] border border-violet-700/30 bg-slate-950/40 p-3">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-violet-200">Key strengths</div>
+                          <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-violet-50">
+                            {activeOopsCalculationOutput.keyStrengths.length ? (
+                              activeOopsCalculationOutput.keyStrengths.map((item) => <li key={item}>{item}</li>)
+                            ) : (
+                              <li>Not available</li>
+                            )}
+                          </ul>
+                        </div>
+                        <div className="rounded-[8px] border border-violet-700/30 bg-slate-950/40 p-3">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-violet-200">Key weaknesses</div>
+                          <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-violet-50">
+                            {activeOopsCalculationOutput.keyWeaknesses.length ? (
+                              activeOopsCalculationOutput.keyWeaknesses.map((item) => <li key={item}>{item}</li>)
+                            ) : (
+                              <li>Not available</li>
+                            )}
+                          </ul>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
             </div>
           </div>
 
@@ -2972,9 +3274,9 @@ function TestResultsPanel({
               <span className="font-semibold text-slate-600 flex items-center">
                 {test.number}
               </span>
-              <div className="truncate" title={test.input}>
+              <div className="min-w-0 whitespace-normal break-words" title={test.input}>
                 <span className="text-slate-500">Input: </span>
-                <code className="font-mono text-slate-800">{test.input.length > 30 ? test.input.substring(0, 30) + "..." : test.input}</code>
+                <code className="font-mono text-slate-800">{test.input}</code>
               </div>
               <div className="truncate" title={test.expected}>
                 <span className="text-slate-500">Expected: </span>

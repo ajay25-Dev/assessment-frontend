@@ -20,19 +20,25 @@ import { notFound } from "next/navigation";
 import { adminUi } from "@/lib/admin/ui";
 import {
   asStringArray,
+  buildQuestionSubmissionRows,
   buildNextBestStep,
+  CodeRunRow,
   clampScore,
   extractLatestSkillScores,
   formatDateTime,
   interpretScoreBand,
   flattenNestedReportData,
+  McqAnswerRow,
   normalizeBucket,
   normalizeReadinessLabel,
   normalizeRisk,
   readinessClasses,
   ReportRow,
   riskClasses,
+  QuestionAttemptRow,
+  QuestionEvaluationRow,
   SkillScoreRow,
+  SqlRunRow,
 } from "@/lib/admin/student-report";
 import { requireAdmin } from "@/lib/admin/supabase-admin";
 
@@ -194,6 +200,55 @@ export default async function StudentReportProfilePage({
   const collegeName = activeBatch?.college_id ? collegeById.get(activeBatch.college_id) || "Not available" : "Not available";
 
   const latestReport = reports[0] || null;
+  const latestAttemptId = latestReport?.attempt_id || null;
+
+  const [
+    { data: latestQuestionAttemptRows },
+    { data: latestEvaluationRows },
+    { data: latestCodeRunRows },
+    { data: latestSqlRunRows },
+    { data: latestMcqRows },
+  ] = latestAttemptId
+    ? await Promise.all([
+        supabase
+          .from("student_question_attempts")
+          .select("id,attempt_id,question_id,section,answer_text,selected_language,selected_options,marked_for_review,status,run_count,submit_count,last_autosaved_at")
+          .eq("attempt_id", latestAttemptId)
+          .order("section")
+          .order("question_id"),
+        supabase
+          .from("student_question_evaluations")
+          .select("question_id,section,deterministic_score,ai_evaluation,final_score")
+          .eq("attempt_id", latestAttemptId)
+          .order("section")
+          .order("question_id"),
+        supabase
+          .from("student_code_runs")
+          .select("question_id,language,run_type,source_code,status,open_tests_passed,open_tests_total,hidden_tests_passed,hidden_tests_total,raw_provider_response,created_at")
+          .eq("attempt_id", latestAttemptId)
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("student_sql_runs")
+          .select("question_id,run_type,query_text,columns,rows,row_count,execution_ms,error_text,comparison_result,created_at")
+          .eq("attempt_id", latestAttemptId)
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("student_mcq_answers")
+          .select("question_id,selected_options,is_correct")
+          .eq("attempt_id", latestAttemptId),
+      ])
+    : [{ data: [] }, { data: [] }, { data: [] }, { data: [] }, { data: [] }];
+
+  const questionSubmissions = latestAttemptId
+    ? buildQuestionSubmissionRows({
+        questionAttempts: (latestQuestionAttemptRows || []) as unknown as QuestionAttemptRow[],
+        evaluations: (latestEvaluationRows || []) as unknown as QuestionEvaluationRow[],
+        codeRuns: (latestCodeRunRows || []) as unknown as CodeRunRow[],
+        sqlRuns: (latestSqlRunRows || []) as unknown as SqlRunRow[],
+        mcqAnswers: (latestMcqRows || []) as unknown as McqAnswerRow[],
+      })
+    : [];
+
   const latestBucket = latestReport ? normalizeBucket(latestReport.readiness_bucket, latestReport.readiness_label) : "Training Needed";
   const latestReadinessLabel = normalizeReadinessLabel(latestBucket);
   const latestScore = clampScore(latestReport?.marks_score);
@@ -736,6 +791,88 @@ export default async function StudentReportProfilePage({
           ) : null}
         </div>
       </section>
+
+      {questionSubmissions.length > 0 ? (
+        <section className={sectionSurface}>
+          <div className="flex items-center gap-2 text-slate-950">
+            <Wrench size={18} className="text-emerald-700" />
+            <h2 className={sectionTitle}>Latest Attempt Question Submissions</h2>
+          </div>
+          <p className={`mt-2 ${adminUi.subtleText}`}>
+            Each question is shown with its raw submission, latest status, and evaluation snapshot.
+          </p>
+
+          <div className="mt-5 grid gap-4 xl:grid-cols-2">
+            {questionSubmissions.map((question) => (
+              <article key={question.question_id} className="rounded-[18px] border border-[var(--color-border-subtle)] bg-[var(--color-bg-muted)] p-4">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-800">{question.section}</p>
+                    <h3 className="mt-1 text-lg font-semibold text-slate-950">{question.question_title}</h3>
+                    <p className="mt-1 text-xs text-slate-500">Question ID: {question.question_id}</p>
+                  </div>
+                  <div className="flex flex-wrap gap-2 text-xs font-semibold text-slate-700">
+                    <span className="rounded-full border border-[var(--color-border-subtle)] bg-white px-2.5 py-1">Score {question.score} / 100</span>
+                    <span className="rounded-full border border-[var(--color-border-subtle)] bg-white px-2.5 py-1">Status {question.status}</span>
+                    <span className="rounded-full border border-[var(--color-border-subtle)] bg-white px-2.5 py-1">Runs {question.run_count}</span>
+                    <span className="rounded-full border border-[var(--color-border-subtle)] bg-white px-2.5 py-1">Submits {question.submit_count}</span>
+                  </div>
+                </div>
+
+                <div className="mt-4 grid gap-3 text-sm leading-6 text-slate-700">
+                  <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                    <div className={softSurface}>
+                      <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Submitted At</p>
+                      <p className="mt-1 text-sm text-slate-800">{formatDateTime(question.submitted_at)}</p>
+                    </div>
+                    <div className={softSurface}>
+                      <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Selected Language</p>
+                      <p className="mt-1 text-sm text-slate-800">{question.selected_language || "Not available"}</p>
+                    </div>
+                    <div className={softSurface}>
+                      <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Marked for Review</p>
+                      <p className="mt-1 text-sm text-slate-800">{question.marked_for_review ? "Yes" : "No"}</p>
+                    </div>
+                    <div className={softSurface}>
+                      <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Evaluation Score</p>
+                      <p className="mt-1 text-sm text-slate-800">{question.score} / 100</p>
+                    </div>
+                  </div>
+
+                  <div className={softSurface}>
+                    <p className="text-sm font-semibold text-slate-900">Raw Submission</p>
+                    <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-[14px] bg-slate-950 p-4 font-mono text-xs leading-6 text-slate-100">
+                      {question.answer_text}
+                    </pre>
+                  </div>
+
+                  {question.selected_options.length > 0 ? (
+                    <div className={softSurface}>
+                      <p className="text-sm font-semibold text-slate-900">Selected Options</p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {question.selected_options.map((option) => (
+                          <span key={option} className="rounded-full border border-[var(--color-border-subtle)] bg-white px-3 py-1.5 text-xs font-semibold text-slate-700">
+                            {option}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <details className="rounded-[16px] border border-[var(--color-border-subtle)] bg-white p-4">
+                    <summary className="cursor-pointer list-none text-sm font-semibold text-slate-900">
+                      Evaluation Snapshot
+                    </summary>
+                    <pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-[14px] bg-slate-50 p-4 text-xs leading-6 text-slate-700">
+                      {question.evaluation_output ? JSON.stringify(question.evaluation_output, null, 2) : "Not available"}
+                    </pre>
+                  </details>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       {reports.length > 0 ? (
         <section className={sectionSurface}>

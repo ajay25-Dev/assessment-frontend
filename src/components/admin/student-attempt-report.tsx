@@ -24,6 +24,7 @@ import {
   formatDateTime,
   formatScore,
   generateStudentReportPdf,
+  asSectionEvaluationArray,
   mapTechnicalLabelToTeacherLabel,
   McqAnswerRow,
   normalizeAiEvaluation,
@@ -95,8 +96,19 @@ function formatStructuredValue(value: unknown) {
   return safeText(value);
 }
 
-function valueTable(entries: Array<{ label: string; value: unknown }>, compact = false) {
-  const filtered = entries.filter((entry) => entry.value !== null && entry.value !== undefined && `${entry.value}`.trim().length > 0);
+function valueTable(
+  entries: Array<{ label: string; value: unknown }>,
+  compact = false,
+  showEmpty = false,
+) {
+  const filtered = showEmpty
+    ? entries
+    : entries.filter(
+        (entry) =>
+          entry.value !== null &&
+          entry.value !== undefined &&
+          `${entry.value}`.trim().length > 0,
+      );
 
   if (!filtered.length) {
     return <p className="text-sm text-slate-500">Not available</p>;
@@ -113,7 +125,9 @@ function valueTable(entries: Array<{ label: string; value: unknown }>, compact =
               </th>
               <td className="px-4 py-3 align-top text-sm leading-6 text-slate-800">
                 {Array.isArray(entry.value) ? (
-                  (entry.value as unknown[]).every((item) => item === null || item === undefined || ["string", "number", "boolean"].includes(typeof item)) ? (
+                  (entry.value as unknown[]).length === 0 ? (
+                    <span className="text-slate-500">Not available</span>
+                  ) : (entry.value as unknown[]).every((item) => item === null || item === undefined || ["string", "number", "boolean"].includes(typeof item)) ? (
                     <ul className="grid gap-1">
                       {(entry.value as unknown[]).map((item, index) => (
                         <li key={`${entry.label}-${index}`}>{safeText(item)}</li>
@@ -188,31 +202,36 @@ function sectionParameterRows(params: {
     return [
       {
         label: "Score Basis",
-        value: "Score is calculated from visible test correctness, expected code checklist coverage, AI-selected complexity ranks versus the question-bank targets, and edge-case performance.",
+        value: "Score is calculated from visible test correctness, expected code checklist coverage, code-derived complexity ranks versus the question-bank targets, and edge-case performance.",
       },
       { label: "Correctness Score", value: output.correctness_score },
       { label: "Open Test Case Score", value: output.open_test_case_score },
       { label: "Hidden Test Case Score", value: output.hidden_test_case_score },
-      { label: "Expected Code Checklist Score", value: output.expected_code_score },
-      { label: "Matched Expected Code", value: output.matched_expected_code },
-      { label: "Missing Expected Code", value: output.missing_expected_code },
-      { label: "Expected Time Complexity Rank", value: output.expected_time_complexity_rank },
+      // { label: "Expected Code Checklist Score", value: output.expected_code_score },
+      // { label: "Matched Expected Code", value: output.matched_expected_code },
+      // { label: "Missing Expected Code", value: output.missing_expected_code },
+      { label: "Approach Match Percentage", value: output.approach_match_percentage },
+      { label: "Expected Approach Used", value: output.expected_approach_used },
+      { label: "Expected Approach Tags", value: output.expected_approach_tags },
+      { label: "AI Returned Approach Tags", value: output.ai_returned_approach_tags },
+      // { label: "Expected Time Complexity Rank", value: output.expected_time_complexity_rank },
       { label: "Expected Time Complexity", value: output.expected_time_complexity_label || output.expected_time_complexity },
-      { label: "Student Time Complexity Rank", value: output.student_time_complexity_rank },
+      // { label: "Student Time Complexity Rank", value: output.student_time_complexity_rank },
       { label: "Calculated Time Complexity", value: output.student_time_complexity_label },
-      { label: "Time Complexity Rank Gap", value: output.time_complexity_rank_gap },
+      // { label: "Time Complexity Rank Gap", value: output.time_complexity_rank_gap },
       { label: "Time Complexity Score", value: output.time_complexity_score },
-      { label: "Expected Space Complexity Rank", value: output.expected_space_complexity_rank },
+      // { label: "Expected Space Complexity Rank", value: output.expected_space_complexity_rank },
       { label: "Expected Space Complexity", value: output.expected_space_complexity_label || output.expected_space_complexity },
-      { label: "Student Space Complexity Rank", value: output.student_space_complexity_rank },
+      // { label: "Student Space Complexity Rank", value: output.student_space_complexity_rank },
       { label: "Calculated Space Complexity", value: output.student_space_complexity_label },
-      { label: "Space Complexity Rank Gap", value: output.space_complexity_rank_gap },
+      // { label: "Space Complexity Rank Gap", value: output.space_complexity_rank_gap },
       { label: "Space Complexity Score", value: output.space_complexity_score },
       { label: "Edge Case Score", value: output.edge_case_score },
+      { label: "Edge Cases Passed", value: output.edge_cases_passed },
       { label: "Open Tests Passed", value: countPair(codeRun?.open_tests_passed, codeRun?.open_tests_total) },
       { label: "Hidden Tests Passed", value: countPair(codeRun?.hidden_tests_passed, codeRun?.hidden_tests_total) },
       { label: "Overall Question Score", value: output.overall_question_score },
-      { label: "Failed Case Analysis", value: output.failed_case_analysis },
+      // { label: "Failed Case Analysis", value: output.failed_case_analysis },
       { label: "Missed Edge Cases", value: output.missed_edge_cases },
     ];
   }
@@ -235,24 +254,28 @@ function sectionParameterRows(params: {
       { label: "Readability Score", value: output.readability_score },
       { label: "NULL / Duplicate Handling Score", value: output.null_duplicate_handling_score },
       { label: "Overall Question Score", value: output.overall_question_score },
-      { label: "Execution Status", value: safeText((sqlRun as { status?: unknown } | null)?.status ?? sqlRun?.run_type, "Not available") },
-      { label: "Expected Columns", value: output.expected_columns },
-      { label: "Visible Expected Rows", value: output.visible_expected_rows },
-      { label: "Result Match Rules", value: output.result_match },
-      { label: "Required Business Rules", value: output.required_business_rules },
-      { label: "Expected SQL Concepts", value: output.expected_sql_concepts },
+      { label: "Placement Readiness Label", value: output.placement_readiness_label },
+      // { label: "Execution Status", value: safeText((sqlRun as { status?: unknown } | null)?.status ?? sqlRun?.run_type, "Not available") },
+      // { label: "Expected Columns", value: output.expected_columns },
+      // { label: "Visible Expected Rows", value: output.visible_expected_rows },
+      // { label: "Result Match Rules", value: output.result_match },
+      // { label: "Required Business Rules", value: output.required_business_rules },
+      // { label: "Expected SQL Concepts", value: output.expected_sql_concepts },
       { label: "Expected SQL Concept Tags", value: output.expected_sql_concept_tags },
-      { label: "Edge Cases", value: output.edge_cases },
-      { label: "NULL Rules", value: output.null_rules },
-      { label: "Duplicate Rules", value: output.duplicate_rules },
+      // { label: "Edge Cases", value: output.edge_cases },
+      // { label: "NULL Rules", value: output.null_rules },
+      // { label: "Duplicate Rules", value: output.duplicate_rules },
       { label: "Hardcoding Risk", value: output.hardcoding_risk },
       { label: "Query Quality Label", value: output.query_quality_label },
-      { label: "AI Returned Concept Tags", value: output.ai_returned_concept_tags },
-      { label: "Expected Concepts Used", value: output.expected_concepts_used },
+      // { label: "AI Returned Concept Tags", value: output.ai_returned_concept_tags },
+      // { label: "Expected Concepts Used", value: output.expected_concepts_used },
       { label: "Missing Concepts", value: output.missing_concepts },
       { label: "Detected Mistakes", value: output.detected_mistakes },
       { label: "Missing Business Rules", value: output.missing_business_rules },
-      { label: "Runtime Observation", value: output.runtime_observation },
+      { label: "Key Strengths", value: output.key_strengths },
+      { label: "Key Weaknesses", value: output.key_weaknesses },
+      { label: "Improvement Recommendation", value: output.improvement_recommendation },
+      // { label: "Runtime Observation", value: output.runtime_observation },
     ];
   }
 
@@ -274,20 +297,35 @@ function sectionParameterRows(params: {
       { label: "Design Pattern Awareness Score", value: output.design_pattern_awareness_score },
       { label: "Overall Question Score", value: output.overall_question_score },
       { label: "Design Maturity Label", value: output.design_maturity_label },
+      { label: "Placement Readiness Label", value: output.placement_readiness_label },
       { label: "Identified Classes", value: output.identified_classes },
       { label: "Identified Interfaces / Abstractions", value: output.identified_interfaces_or_abstractions },
       { label: "Design Patterns Detected", value: output.design_patterns_detected },
       { label: "Missing Components", value: output.missing_components },
       { label: "Red Flags", value: output.red_flags },
+      { label: "Key Strengths", value: output.key_strengths },
+      { label: "Key Weaknesses", value: output.key_weaknesses },
+      { label: "Improvement Recommendation", value: output.improvement_recommendation },
     ];
   }
 
   return [
-    { label: "Score Basis", value: "Exact answer match against the answer key. No AI evaluation is used for MCQ scoring." },
-    { label: "Selected Options", value: asStringArray(mcq?.selected_options) },
-    { label: "Correctness", value: mcq?.is_correct === null || mcq?.is_correct === undefined ? "Not available" : mcq.is_correct ? "Correct" : "Incorrect" },
-    { label: "Scoring Method", value: "Exact match against the answer key" },
-    { label: "No AI Evaluation", value: "MCQ scoring is deterministic and does not use AI." },
+    // { label: "Score Basis", value: "Exact answer match against the answer key. No AI evaluation is used for MCQ scoring." },
+    { label: "Overall MCQ Score", value: output.overall_mcq_score },
+    // { label: "Selected Options", value: asStringArray(mcq?.selected_options) },
+    // { label: "Correctness", value: mcq?.is_correct === null || mcq?.is_correct === undefined ? "Not available" : mcq.is_correct ? "Correct" : "Incorrect" },
+    // { label: "Scoring Method", value: "Exact match against the answer key" },
+    // { label: "No AI Evaluation", value: "MCQ scoring is deterministic and does not use AI." },
+    // { label: "Subject Scores", value: output.subject_scores },
+    // { label: "Topic Scores", value: output.topic_scores },
+    // { label: "Strong Topics", value: output.strong_topics },
+    // { label: "Weak Topics", value: output.weak_topics },
+    // { label: "Misconceptions Detected", value: output.misconceptions_detected },
+    // { label: "Guessing Risk", value: output.guessing_risk },
+    // { label: "Confidence Signal", value: output.confidence_signal },
+    // { label: "Time Behavior Summary", value: output.time_behavior_summary },
+    // { label: "Revision Recommendation", value: output.revision_recommendation },
+    // { label: "Placement Readiness Label", value: output.placement_readiness_label },
   ];
 }
 
@@ -304,7 +342,7 @@ function sectionEvidenceRows(params: {
       { label: "Language", value: codeRun?.language || question.selected_language || "Not available" },
       { label: "Run Type", value: codeRun?.run_type || "Not available" },
       { label: "Status", value: codeRun?.status || "Not available" },
-      { label: "Answer / Submission", value: question.answer_text || "No evidence provided" },
+      { label: "Answer / Submission", value: codeRun?.source_code || question.answer_text || "No evidence provided" },
     ];
   }
 
@@ -317,7 +355,7 @@ function sectionEvidenceRows(params: {
       { label: "Returned Rows", value: sqlRun?.rows || [] },
       { label: "Comparison Result", value: sqlRun?.comparison_result || "Not available" },
       { label: "Error", value: sqlRun?.error_text || "None" },
-      { label: "Query", value: sqlRun?.query_text || "No query submitted" },
+      { label: "Query", value: sqlRun?.query_text || question.answer_text || "No query submitted" },
     ];
   }
 
@@ -326,6 +364,25 @@ function sectionEvidenceRows(params: {
     { label: "Marked for Review", value: question.marked_for_review ? "Yes" : "No" },
     { label: "Last Autosaved", value: formatDateTime(question.last_autosaved_at) },
   ];
+}
+
+function submissionTextForQuestion(params: {
+  section: string;
+  question: QuestionAttemptRow;
+  codeRun?: CodeRunRow | null;
+  sqlRun?: SqlRunRow | null;
+}) {
+  const { section, question, codeRun, sqlRun } = params;
+
+  if (section === "SQL") {
+    return sqlRun?.query_text || question.answer_text || "No evidence provided";
+  }
+
+  if (section === "DSA" || section === "OOPs") {
+    return codeRun?.source_code || question.answer_text || "No evidence provided";
+  }
+
+  return question.answer_text || "No evidence provided";
 }
 
 export function StudentAttemptReport({
@@ -350,6 +407,7 @@ export function StudentAttemptReport({
   const deterministicReadiness = asRecord(reportJson?.deterministic_readiness);
   const integrity = asRecord(reportJson?.integrity);
   const readinessBucket = normalizeBucket(report.readiness_bucket, report.readiness_label);
+  const reportSectionEvaluations = asSectionEvaluationArray(reportJson?.section_evaluations);
   const batchById = new Map(batches.map((batch) => [batch.id, batch]));
   const collegeById = new Map(colleges.map((college) => [college.id, college.name || ""]));
   const activeAssignment = assignments[0] || null;
@@ -362,7 +420,44 @@ export function StudentAttemptReport({
   const detailedWeaknesses = extractWeaknesses(report.detailed_weaknesses);
   const teacherActions = extractTeacherActions(report);
   const skillRows = extractSkillScores(report);
-  const evaluationByQuestionId = new Map(evaluations.map((item) => [item.question_id, item]));
+  const evaluationByQuestionId = new Map<string, QuestionEvaluationRow>();
+
+  for (const item of evaluations) {
+    evaluationByQuestionId.set(item.question_id, item);
+  }
+
+  for (const item of reportSectionEvaluations) {
+    const output = asRecord(item.output);
+    const questionId = safeText(output?.question_id || output?.question || output?.id, "");
+    if (!questionId) continue;
+
+    const fallbackOutput: Record<string, unknown> = {
+      section: item.section,
+      ...output,
+    };
+    const fallbackEvaluation: QuestionEvaluationRow = {
+      question_id: questionId,
+      section: item.section,
+      deterministic_score: clampScore(
+        fallbackOutput.overall_question_score ?? fallbackOutput.overall_mcq_score,
+      ),
+      ai_evaluation: {
+        section: item.section,
+        prompt_version: "report-json-fallback",
+        model: "deterministic",
+        output: fallbackOutput,
+      },
+      final_score: clampScore(
+        fallbackOutput.overall_question_score ?? fallbackOutput.overall_mcq_score,
+      ),
+    };
+
+    const existing = evaluationByQuestionId.get(questionId);
+    const existingOutput = asRecord(normalizeAiEvaluation(existing?.ai_evaluation)?.output);
+    if (!existing || !Object.keys(existingOutput || {}).length) {
+      evaluationByQuestionId.set(questionId, fallbackEvaluation);
+    }
+  }
   const latestCodeRunByQuestionId = new Map<string, CodeRunRow>();
   const latestSqlRunByQuestionId = new Map<string, SqlRunRow>();
   const mcqByQuestionId = new Map(mcqAnswers.map((item) => [item.question_id, item]));
@@ -754,12 +849,12 @@ export function StudentAttemptReport({
                                 </div>
                                 <div className="rounded-[14px] border border-slate-200 bg-white p-3">
                                   <p className="font-semibold text-slate-900">Scoring parameters</p>
-                                  <div className="mt-3">{valueTable(parameterRows, true)}</div>
+                                  <div className="mt-3">{valueTable(parameterRows, true, true)}</div>
                                 </div>
-                                <div className="rounded-[14px] border border-slate-200 bg-white p-3">
+                                {/* <div className="rounded-[14px] border border-slate-200 bg-white p-3">
                                   <p className="font-semibold text-slate-900">Supporting evidence</p>
                                   <div className="mt-3">{valueTable(evidenceRows, true)}</div>
-                                </div>
+                                </div> */}
                               </div>
                             </section>
                           </div>
@@ -849,7 +944,12 @@ export function StudentAttemptReport({
                               <div>
                                 <p className="font-semibold text-slate-900">Answer / submission</p>
                                 <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-[14px] bg-slate-950 p-4 font-mono text-xs leading-6 text-slate-100">
-                                  {question.answer_text || "No evidence provided"}
+                                  {submissionTextForQuestion({
+                                    section: group.section,
+                                    question,
+                                    codeRun,
+                                    sqlRun,
+                                  })}
                                 </pre>
                               </div>
                               {question.selected_options ? (
@@ -880,12 +980,12 @@ export function StudentAttemptReport({
                               </div>
                               <div className="rounded-[14px] border border-slate-200 bg-white p-3">
                                 <p className="font-semibold text-slate-900">Scoring parameters</p>
-                                <div className="mt-3">{valueTable(parameterRows, true)}</div>
+                                <div className="mt-3">{valueTable(parameterRows, true, true)}</div>
                               </div>
-                              <div className="rounded-[14px] border border-slate-200 bg-white p-3">
+                              {/* <div className="rounded-[14px] border border-slate-200 bg-white p-3">
                                 <p className="font-semibold text-slate-900">Supporting evidence</p>
                                 <div className="mt-3">{valueTable(evidenceRows, true)}</div>
-                              </div>
+                              </div> */}
                             </div>
                           </section>
                         </div>
