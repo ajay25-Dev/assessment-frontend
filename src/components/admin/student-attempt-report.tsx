@@ -202,7 +202,7 @@ function sectionParameterRows(params: {
     return [
       {
         label: "Score Basis",
-        value: "Score is calculated from visible test correctness, expected code checklist coverage, AI-selected complexity ranks versus the question-bank targets, and edge-case performance.",
+        value: "Score is calculated from visible test correctness, expected code checklist coverage, code-derived complexity ranks versus the question-bank targets, and edge-case performance.",
       },
       { label: "Correctness Score", value: output.correctness_score },
       { label: "Open Test Case Score", value: output.open_test_case_score },
