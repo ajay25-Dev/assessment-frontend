@@ -120,6 +120,25 @@ export type SectionEvaluationRecord = {
   output?: Record<string, unknown>;
 };
 
+export type QuestionSubmissionRow = {
+  question_id: string;
+  question_title: string;
+  section: string;
+  score: number;
+  answer_text: string;
+  selected_language: string | null;
+  selected_options: string[];
+  status: string;
+  marked_for_review: boolean;
+  run_count: number;
+  submit_count: number;
+  submitted_at: string | null;
+  evaluation_output: Record<string, unknown> | null;
+  code_run: CodeRunRow | null;
+  sql_run: SqlRunRow | null;
+  mcq_answer: McqAnswerRow | null;
+};
+
 export function safeText(value: unknown, fallback = "Not available") {
   if (value === null || value === undefined) return fallback;
   if (typeof value === "string") {
@@ -204,15 +223,15 @@ export function mapTechnicalLabelToTeacherLabel(key: string) {
     evaluation_reason: "Why the AI Gave This Evaluation",
     expected_approach_match: "Expected Approach Used",
     detected_approach: "Detected Approach",
-    expected_code_score: "Expected Code Checklist Score",
-    matched_expected_code: "Matched Expected Code",
-    missing_expected_code: "Missing Expected Code",
-    expected_time_complexity_rank: "Expected Time Complexity Rank",
-    student_time_complexity_rank: "Student Time Complexity Rank",
-    time_complexity_rank_gap: "Time Complexity Rank Gap",
-    expected_space_complexity_rank: "Expected Space Complexity Rank",
-    student_space_complexity_rank: "Student Space Complexity Rank",
-    space_complexity_rank_gap: "Space Complexity Rank Gap",
+    // expected_code_score: "Expected Code Checklist Score",
+    // matched_expected_code: "Matched Expected Code",
+    // missing_expected_code: "Missing Expected Code",
+    // expected_time_complexity_rank: "Expected Time Complexity Rank",
+    // student_time_complexity_rank: "Student Time Complexity Rank",
+    // time_complexity_rank_gap: "Time Complexity Rank Gap",
+    // expected_space_complexity_rank: "Expected Space Complexity Rank",
+    // student_space_complexity_rank: "Student Space Complexity Rank",
+    // space_complexity_rank_gap: "Space Complexity Rank Gap",
     correctness_score: "Correctness Score",
     open_test_case_score: "Open Test Case Score",
     hidden_test_case_score: "Hidden Test Case Score",
@@ -354,24 +373,53 @@ export function asStringArray(value: unknown) {
 }
 
 export function asSectionEvaluationArray(value: unknown) {
-  return Array.isArray(value)
-    ? value
-        .map((item) => {
-          const record = asRecord(item);
-          if (!record) return null;
-          return {
-            section: textValue(record.section),
-            output: asRecord(record.output) || undefined,
-          } satisfies SectionEvaluationRecord;
-        })
-        .filter(Boolean) as SectionEvaluationRecord[]
-    : [];
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        const record = asRecord(item);
+        if (!record) return null;
+        return {
+          section: textValue(record.section),
+          output:
+            asRecord(record.output) ||
+            asRecord((record.evaluation as Record<string, unknown> | null)?.output) ||
+            asRecord(record.evaluation) ||
+            undefined,
+        } satisfies SectionEvaluationRecord;
+      })
+      .filter(Boolean) as SectionEvaluationRecord[];
+  }
+
+  const record = asRecord(value);
+  if (!record) return [];
+
+  return Object.entries(record).flatMap(([section, items]) =>
+    Array.isArray(items)
+      ? items
+          .map((item) => {
+            const itemRecord = asRecord(item);
+            if (!itemRecord) return null;
+            return {
+              section: section || textValue(itemRecord.section),
+              output:
+                asRecord(itemRecord.output) ||
+                asRecord((itemRecord.evaluation as Record<string, unknown> | null)?.output) ||
+                asRecord(itemRecord.evaluation) ||
+                undefined,
+            } satisfies SectionEvaluationRecord;
+          })
+          .filter(Boolean)
+      : [],
+  ) as SectionEvaluationRecord[];
 }
 
 export function normalizeAiEvaluation(value: unknown) {
   const record = asRecord(value);
   if (!record) return null;
-  const output = asRecord(record.output);
+  const output =
+    asRecord(record.output) ||
+    asRecord((record.evaluation as Record<string, unknown> | null)?.output) ||
+    asRecord(record.evaluation);
   return {
     ...record,
     output,
@@ -542,6 +590,100 @@ export function extractSkillScores(report: Pick<ReportRow, "marks_score" | "capa
     { label: "Complexity Score", value: clampScore(report.complexity_score), helper: "Time and space efficiency." },
     { label: "Code Quality Score", value: clampScore(report.code_quality_score), helper: "Readability, structure, and robustness." },
   ];
+}
+
+export function buildQuestionSubmissionRows(params: {
+  questionAttempts: QuestionAttemptRow[];
+  evaluations?: QuestionEvaluationRow[];
+  codeRuns?: CodeRunRow[];
+  sqlRuns?: SqlRunRow[];
+  mcqAnswers?: McqAnswerRow[];
+}): QuestionSubmissionRow[] {
+  const evaluationByQuestionId = new Map(
+    (params.evaluations || []).map((evaluation) => [evaluation.question_id, evaluation]),
+  );
+  const codeRunByQuestionId = new Map<string, CodeRunRow>();
+  const sqlRunByQuestionId = new Map<string, SqlRunRow>();
+  const mcqAnswerByQuestionId = new Map(
+    (params.mcqAnswers || []).map((answer) => [answer.question_id, answer]),
+  );
+
+  for (const row of params.codeRuns || []) {
+    if (!codeRunByQuestionId.has(row.question_id)) {
+      codeRunByQuestionId.set(row.question_id, row);
+    }
+  }
+
+  for (const row of params.sqlRuns || []) {
+    if (!sqlRunByQuestionId.has(row.question_id)) {
+      sqlRunByQuestionId.set(row.question_id, row);
+    }
+  }
+
+  return (params.questionAttempts || [])
+    .map((question) => {
+      const evaluation = evaluationByQuestionId.get(question.question_id);
+      const evaluationOutput = asRecord(normalizeAiEvaluation(evaluation?.ai_evaluation)?.output);
+      const section = question.section || evaluation?.section || "Unknown";
+      const codeRun = codeRunByQuestionId.get(question.question_id) || null;
+      const sqlRun = sqlRunByQuestionId.get(question.question_id) || null;
+      const mcqAnswer = mcqAnswerByQuestionId.get(question.question_id) || null;
+      const selectedOptions =
+        section === "MCQ"
+          ? asStringArray(mcqAnswer?.selected_options)
+          : asStringArray(question.selected_options);
+      const answerText =
+        section === "MCQ"
+          ? selectedOptions.join(", ") || question.answer_text || "No evidence provided"
+          : section === "SQL"
+          ? sqlRun?.query_text || question.answer_text || "No evidence provided"
+          : section === "DSA" || section === "OOPs"
+            ? codeRun?.source_code || question.answer_text || "No evidence provided"
+            : question.answer_text || "No evidence provided";
+      const score = clampScore(
+        section === "MCQ" && mcqAnswer?.is_correct !== null && mcqAnswer?.is_correct !== undefined
+          ? (mcqAnswer.is_correct ? 100 : 0)
+          : evaluation?.final_score ?? evaluation?.deterministic_score ?? evaluationOutput?.overall_question_score,
+      );
+
+      return {
+        question_id: question.question_id,
+        question_title:
+          safeText(
+            evaluationOutput?.question_title ||
+              evaluationOutput?.title ||
+              evaluationOutput?.question ||
+              question.question_id,
+            question.question_id,
+          ) || question.question_id,
+        section,
+        score,
+        answer_text: answerText,
+        selected_language: question.selected_language || codeRun?.language || null,
+        selected_options: selectedOptions,
+        status:
+          section === "MCQ" && mcqAnswer?.is_correct !== null && mcqAnswer?.is_correct !== undefined
+            ? mcqAnswer.is_correct
+              ? "Correct"
+              : "Incorrect"
+            : question.status || codeRun?.status || sqlRun?.run_type || "Not available",
+        marked_for_review: Boolean(question.marked_for_review),
+        run_count: safeNumber(question.run_count, 0),
+        submit_count: safeNumber(question.submit_count, 0),
+        submitted_at: question.last_autosaved_at,
+        evaluation_output: evaluationOutput,
+        code_run: codeRun,
+        sql_run: sqlRun,
+        mcq_answer: mcqAnswer,
+      } satisfies QuestionSubmissionRow;
+    })
+    .sort((left, right) => {
+      const sectionOrder: Record<string, number> = { DSA: 0, SQL: 1, OOPs: 2, MCQ: 3 };
+      const leftOrder = sectionOrder[left.section] ?? 99;
+      const rightOrder = sectionOrder[right.section] ?? 99;
+      if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+      return left.question_id.localeCompare(right.question_id);
+    });
 }
 
 export function generateStudentReportPdf(studentId: string, attemptId: string) {

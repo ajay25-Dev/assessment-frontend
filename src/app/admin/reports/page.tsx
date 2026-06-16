@@ -38,6 +38,7 @@ type ReportRow = {
   teacher_action: string | null;
   faculty_insight: string | null;
   company_recommendation: string | null;
+  report_json: unknown;
   created_at: string | null;
 };
 
@@ -71,6 +72,7 @@ type FilteredReport = ReportRow & {
   student_email: string;
   batch_name: string;
   college_name: string;
+  submission_summary: string;
 };
 
 type ReadinessBucket = "Ready" | "Training Needed" | "Failed";
@@ -156,6 +158,33 @@ function buildStudentReportHref(report: { student_id: string | null; attempt_id:
   return "/admin/reports/students";
 }
 
+function submissionSectionCounts(reportJson: unknown) {
+  const record =
+    reportJson && typeof reportJson === "object" && !Array.isArray(reportJson)
+      ? (reportJson as Record<string, unknown>)
+      : {};
+  const sectionEvaluations =
+    record.section_evaluations && typeof record.section_evaluations === "object" && !Array.isArray(record.section_evaluations)
+      ? (record.section_evaluations as Record<string, unknown>)
+      : {};
+
+  return ["DSA", "SQL", "OOPs", "MCQ"].map((section) => {
+    const evaluations = sectionEvaluations[section];
+    return {
+      section,
+      count: Array.isArray(evaluations) ? evaluations.length : 0,
+    };
+  });
+}
+
+function formatSubmissionSummary(reportJson: unknown) {
+  const parts = submissionSectionCounts(reportJson)
+    .filter((entry) => entry.count > 0)
+    .map((entry) => `${entry.section} ${entry.count}`);
+
+  return parts.length ? parts.join(" | ") : "No question-level drill-down available";
+}
+
 export default async function AdminReportsPage({
   searchParams,
 }: {
@@ -210,6 +239,7 @@ export default async function AdminReportsPage({
           "teacher_action",
           "faculty_insight",
           "company_recommendation",
+          "report_json",
           "created_at",
         ].join(","),
       )
@@ -254,6 +284,7 @@ export default async function AdminReportsPage({
       student_email: profile?.email || report.student_id || "-",
       batch_name: batch?.name || "-",
       college_name: collegeName,
+      submission_summary: formatSubmissionSummary(report.report_json),
     } satisfies FilteredReport;
   });
 
@@ -488,6 +519,7 @@ export default async function AdminReportsPage({
                   <th className="px-4 py-3 font-medium">Student</th>
                   <th className="px-4 py-3 font-medium">Assessment</th>
                   <th className="px-4 py-3 font-medium">Performance</th>
+                  <th className="px-4 py-3 font-medium">Submission Drill-Down</th>
                   <th className="px-4 py-3 font-medium">Readiness / Risk</th>
                   <th className="px-4 py-3 font-medium">Submitted</th>
                   <th className="px-4 py-3 font-medium">Actions</th>
@@ -539,6 +571,9 @@ export default async function AdminReportsPage({
                         </div>
                       </td>
                       <td className="px-4 py-4">
+                        <p className="max-w-[220px] text-sm leading-6 text-slate-700">{report.submission_summary}</p>
+                      </td>
+                      <td className="px-4 py-4">
                         <div className="grid gap-2">
                           <div className="flex flex-wrap gap-2">
                             <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${readinessClasses(bucket)}`}>{bucket}</span>
@@ -573,7 +608,7 @@ export default async function AdminReportsPage({
                 })}
                 {filteredReports.length === 0 ? (
                   <tr>
-                    <td className="px-4 py-8 text-center text-slate-500" colSpan={7}>
+                    <td className="px-4 py-8 text-center text-slate-500" colSpan={8}>
                       No submitted assessment reports match the current filters.
                     </td>
                   </tr>
@@ -625,6 +660,11 @@ export default async function AdminReportsPage({
                       <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1">OOPs {score(report.oops_score)}</span>
                       <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1">MCQ {score(report.mcq_score)}</span>
                     </div>
+                  </div>
+
+                  <div className="rounded-[14px] border border-slate-200 bg-white px-3 py-3">
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Submission Drill-Down</p>
+                    <p className="mt-2 text-sm leading-6 text-slate-700">{report.submission_summary}</p>
                   </div>
 
                   <div className="grid gap-2 rounded-[14px] border border-slate-200 bg-white px-3 py-3">

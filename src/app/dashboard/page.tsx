@@ -203,18 +203,44 @@ function asRecord(value: unknown) {
 }
 
 function asSectionEvaluationArray(value: unknown) {
-  return Array.isArray(value)
-    ? value
-        .map((item) => {
-          const record = asRecord(item);
-          if (!record) return null;
-          return {
-            section: textValue(record.section),
-            output: asRecord(record.output) || undefined,
-          } satisfies SectionEvaluationRecord;
-        })
-        .filter(Boolean) as SectionEvaluationRecord[]
-    : [];
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        const record = asRecord(item);
+        if (!record) return null;
+        return {
+          section: textValue(record.section),
+          output:
+            asRecord(record.output) ||
+            asRecord((record.evaluation as Record<string, unknown> | null)?.output) ||
+            asRecord(record.evaluation) ||
+            undefined,
+        } satisfies SectionEvaluationRecord;
+      })
+      .filter(Boolean) as SectionEvaluationRecord[];
+  }
+
+  const record = asRecord(value);
+  if (!record) return [];
+
+  return Object.entries(record).flatMap(([section, items]) =>
+    Array.isArray(items)
+      ? items
+          .map((item) => {
+            const itemRecord = asRecord(item);
+            if (!itemRecord) return null;
+            return {
+              section: section || textValue(itemRecord.section),
+              output:
+                asRecord(itemRecord.output) ||
+                asRecord((itemRecord.evaluation as Record<string, unknown> | null)?.output) ||
+                asRecord(itemRecord.evaluation) ||
+                undefined,
+            } satisfies SectionEvaluationRecord;
+          })
+          .filter(Boolean)
+      : [],
+  ) as SectionEvaluationRecord[];
 }
 
 function numberValue(value: unknown) {
