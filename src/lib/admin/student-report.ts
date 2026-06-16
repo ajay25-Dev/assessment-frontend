@@ -88,7 +88,10 @@ export type SqlRunRow = {
   question_id: string;
   run_type: string | null;
   query_text: string | null;
+  columns: string[] | null;
+  rows: unknown;
   row_count: number | null;
+  execution_ms: number | null;
   error_text: string | null;
   comparison_result: unknown;
   created_at: string | null;
@@ -217,18 +220,38 @@ export function mapTechnicalLabelToTeacherLabel(key: string) {
     space_complexity_score: "Space Complexity Score",
     edge_case_score: "Edge Case Score",
     code_quality_score: "Code Quality Score",
+    readiness_score: "Readiness Score",
     overall_question_score: "Overall Question Score",
     result_correctness_score: "Result Correctness Score",
     business_logic_score: "Business Logic Score",
     sql_concept_score: "SQL Concept Score",
     query_efficiency_score: "Query Efficiency Score",
+    formatting_score: "Formatting Score",
+    alias_score: "Alias Score",
+    structure_score: "Structure Score",
+    simplicity_score: "Simplicity Score",
     readability_score: "Readability Score",
     null_duplicate_handling_score: "NULL / Duplicate Handling Score",
     query_quality_label: "Query Quality Label",
+    ai_returned_concept_tags: "AI Returned Concept Tags",
+    expected_sql_concept_tags: "Expected SQL Concept Tags",
     expected_concepts_used: "Expected Concepts Used",
     missing_concepts: "Missing Concepts",
     detected_mistakes: "Detected Mistakes",
     missing_business_rules: "Missing Business Rules",
+    expected_columns: "Expected Columns",
+    visible_expected_rows: "Visible Expected Rows",
+    result_match: "Result Match Rules",
+    required_business_rules: "Required Business Rules",
+    expected_sql_concepts: "Expected SQL Concepts",
+    edge_cases: "Edge Cases",
+    null_rules: "NULL Rules",
+    duplicate_rules: "Duplicate Rules",
+    sql_result_columns: "SQL Result Columns",
+    sql_result_rows: "SQL Result Rows",
+    sql_result_row_count: "SQL Result Row Count",
+    sql_result_error: "SQL Result Error",
+    runtime_observation: "Runtime Observation",
     class_design_score: "Class Design Score",
     abstraction_score: "Abstraction Score",
     encapsulation_score: "Encapsulation Score",
@@ -415,6 +438,7 @@ export function extractLatestSkillScores(report: ReportRow, reportJson: unknown)
   return [
     { label: "Overall Score", value: clampScore(report.marks_score ?? dashboardOutput?.overall_marks_score), helper: "How the student performed overall in this assessment." },
     { label: "Problem Solving Score", value: clampScore(report.problem_solving_score ?? report.capability_score ?? dashboardOutput?.problem_solving_score ?? dashboardOutput?.capability_score), helper: "Deterministic score based on correctness, approach, complexity, edge cases, and code quality." },
+    { label: "Readiness Score", value: clampScore(dashboardOutput?.readiness_score), helper: "Placement readiness summary based on marks, capability, solution quality, and risk signals." },
     { label: "DSA", value: clampScore(report.dsa_score ?? dashboardOutput?.dsa_score), helper: "Algorithmic problem-solving and complexity control." },
     { label: "SQL", value: clampScore(report.sql_score ?? dashboardOutput?.sql_score), helper: "Query accuracy, logic, and output quality." },
     { label: "OOPs", value: clampScore(report.oops_score ?? dashboardOutput?.oops_score), helper: "Object design, abstraction, and maintainability." },

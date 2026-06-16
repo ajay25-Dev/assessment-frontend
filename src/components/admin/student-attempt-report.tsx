@@ -80,6 +80,21 @@ function valueList(value: unknown, emptyLabel = "Not available") {
   );
 }
 
+function formatStructuredValue(value: unknown) {
+  if (value === null || value === undefined) return "Not available";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value) || typeof value === "object") {
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch {
+      return safeText(value);
+    }
+  }
+  return safeText(value);
+}
+
 function valueTable(entries: Array<{ label: string; value: unknown }>, compact = false) {
   const filtered = entries.filter((entry) => entry.value !== null && entry.value !== undefined && `${entry.value}`.trim().length > 0);
 
@@ -98,13 +113,21 @@ function valueTable(entries: Array<{ label: string; value: unknown }>, compact =
               </th>
               <td className="px-4 py-3 align-top text-sm leading-6 text-slate-800">
                 {Array.isArray(entry.value) ? (
-                  <ul className="grid gap-1">
-                    {(entry.value as unknown[]).map((item, index) => (
-                      <li key={`${entry.label}-${index}`}>{safeText(item)}</li>
-                    ))}
-                  </ul>
+                  (entry.value as unknown[]).every((item) => item === null || item === undefined || ["string", "number", "boolean"].includes(typeof item)) ? (
+                    <ul className="grid gap-1">
+                      {(entry.value as unknown[]).map((item, index) => (
+                        <li key={`${entry.label}-${index}`}>{safeText(item)}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-[12px] bg-slate-50 p-3 text-xs leading-5 text-slate-700">
+                      {formatStructuredValue(entry.value)}
+                    </pre>
+                  )
                 ) : typeof entry.value === "object" && entry.value !== null ? (
-                  <span className="text-slate-500">Nested data available in expandable sections below.</span>
+                  <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-[12px] bg-slate-50 p-3 text-xs leading-5 text-slate-700">
+                    {formatStructuredValue(entry.value)}
+                  </pre>
                 ) : (
                   safeText(entry.value)
                 )}
@@ -165,7 +188,7 @@ function sectionParameterRows(params: {
     return [
       {
         label: "Score Basis",
-        value: "Score is calculated from visible test correctness, expected code checklist coverage, Judge0 runtime/memory versus the question-bank ideal targets, and edge-case performance.",
+        value: "Score is calculated from visible test correctness, expected code checklist coverage, AI-selected complexity ranks versus the question-bank targets, and edge-case performance.",
       },
       { label: "Correctness Score", value: output.correctness_score },
       { label: "Open Test Case Score", value: output.open_test_case_score },
@@ -198,22 +221,38 @@ function sectionParameterRows(params: {
     return [
       {
         label: "Score Basis",
-        value: "Result correctness, business rules, SQL concepts, query efficiency, readability, and NULL or duplicate handling.",
+        value:
+          "Result correctness against visible expected rows, business rules, SQL concepts, query efficiency, formatting, aliasing, structure, simplicity, and NULL or duplicate handling.",
       },
       { label: "Result Correctness Score", value: output.result_correctness_score },
       { label: "Business Logic Score", value: output.business_logic_score },
       { label: "SQL Concept Score", value: output.sql_concept_score },
       { label: "Query Efficiency Score", value: output.query_efficiency_score },
+      { label: "Formatting Score", value: output.formatting_score },
+      { label: "Alias Score", value: output.alias_score },
+      { label: "Structure Score", value: output.structure_score },
+      { label: "Simplicity Score", value: output.simplicity_score },
       { label: "Readability Score", value: output.readability_score },
       { label: "NULL / Duplicate Handling Score", value: output.null_duplicate_handling_score },
       { label: "Overall Question Score", value: output.overall_question_score },
       { label: "Execution Status", value: safeText((sqlRun as { status?: unknown } | null)?.status ?? sqlRun?.run_type, "Not available") },
+      { label: "Expected Columns", value: output.expected_columns },
+      { label: "Visible Expected Rows", value: output.visible_expected_rows },
+      { label: "Result Match Rules", value: output.result_match },
+      { label: "Required Business Rules", value: output.required_business_rules },
+      { label: "Expected SQL Concepts", value: output.expected_sql_concepts },
+      { label: "Expected SQL Concept Tags", value: output.expected_sql_concept_tags },
+      { label: "Edge Cases", value: output.edge_cases },
+      { label: "NULL Rules", value: output.null_rules },
+      { label: "Duplicate Rules", value: output.duplicate_rules },
       { label: "Hardcoding Risk", value: output.hardcoding_risk },
       { label: "Query Quality Label", value: output.query_quality_label },
+      { label: "AI Returned Concept Tags", value: output.ai_returned_concept_tags },
       { label: "Expected Concepts Used", value: output.expected_concepts_used },
       { label: "Missing Concepts", value: output.missing_concepts },
       { label: "Detected Mistakes", value: output.detected_mistakes },
       { label: "Missing Business Rules", value: output.missing_business_rules },
+      { label: "Runtime Observation", value: output.runtime_observation },
     ];
   }
 
@@ -273,6 +312,10 @@ function sectionEvidenceRows(params: {
     return [
       { label: "Run Type", value: sqlRun?.run_type || "Not available" },
       { label: "Rows Returned", value: sqlRun?.row_count ?? "Not available" },
+      { label: "Execution Time (ms)", value: sqlRun?.execution_ms ?? "Not available" },
+      { label: "Returned Columns", value: sqlRun?.columns || [] },
+      { label: "Returned Rows", value: sqlRun?.rows || [] },
+      { label: "Comparison Result", value: sqlRun?.comparison_result || "Not available" },
       { label: "Error", value: sqlRun?.error_text || "None" },
       { label: "Query", value: sqlRun?.query_text || "No query submitted" },
     ];
@@ -345,6 +388,7 @@ export function StudentAttemptReport({
   const summaryMetrics = [
     { label: "Overall Score", value: formatScore(report.marks_score), helper: "How the student performed overall in this assessment." },
     { label: "Problem Solving Score", value: formatScore(report.problem_solving_score ?? report.capability_score), helper: "Deterministic score based on correctness, approach, complexity, edge cases, and code quality." },
+    { label: "Readiness Score", value: formatScore(dashboardOutput?.readiness_score), helper: "Placement readiness summary based on marks, capability, solution quality, and risk signals." },
     { label: "Final Evaluation", value: readinessBucket, helper: "AI recommendation based on score, capability, and evidence." },
     { label: "Main Learning Gap", value: report.weakest_section || "Not available", helper: "Topic that needs the most focused revision." },
     { label: "Practice Priority", value: report.training_priority || "Not available", helper: "Suggested next topic or skill to practice." },

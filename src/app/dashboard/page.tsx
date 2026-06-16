@@ -50,6 +50,7 @@ type StudentAssessmentReportRow = {
   marks_score: number | null;
   capability_score: number | null;
   problem_solving_score: number | null;
+  readiness_score: number | null;
   dsa_score: number | null;
   sql_score: number | null;
   oops_score: number | null;
@@ -603,6 +604,7 @@ export default async function DashboardPage() {
     : 0;
   const dashboardMarks = numberValue(dashboardOutput?.overall_marks_score);
   const dashboardCapability = numberValue(dashboardOutput?.problem_solving_score ?? dashboardOutput?.capability_score);
+  const dashboardReadiness = numberValue(dashboardOutput?.readiness_score);
   const dashboardApproach = numberValue(dashboardOutput?.approach_score);
   const dashboardComplexity = numberValue(dashboardOutput?.complexity_score);
   const dashboardCodeQuality = numberValue(dashboardOutput?.code_quality_score);
@@ -648,6 +650,24 @@ export default async function DashboardPage() {
             <li>Evaluator output: {dashboardCapability || clampScore(latestReport.problem_solving_score ?? latestReport.capability_score)}</li>
             <li>Section support: DSA {clampScore(latestReport.dsa_score)}, SQL {clampScore(latestReport.sql_score)}, OOPs {clampScore(latestReport.oops_score)}, MCQ {clampScore(latestReport.mcq_score)}</li>
             <li>Strongest / weakest: {latestReport.strongest_section || "-"} / {latestReport.weakest_section || "-"}</li>
+          </ul>
+        </div>
+      ),
+    },
+    {
+      label: "Readiness Score",
+      value: dashboardReadiness,
+      icon: BadgeCheck,
+      id: "kpi-readiness",
+      details: (
+        <div className="space-y-3">
+          <p>
+            Readiness score is the placement summary KPI. It blends marks, capability, approach, complexity, code quality, and risk signals into one score.
+          </p>
+          <ul className="space-y-2">
+            <li>Evaluator output: {dashboardReadiness || 0}</li>
+            <li>Readiness label: {readinessLabel}</li>
+            <li>Risk context: brute-force {bruteForceRisk}, hardcoding {hardcodingRisk}, compilation {compilationBehaviour}</li>
           </ul>
         </div>
       ),
