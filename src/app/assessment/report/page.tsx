@@ -158,7 +158,7 @@ export default async function AssessmentReportPage({ searchParams }: PageProps) 
       client_metadata: {
         source_assessment_id?: string;
         integrity_status?: string;
-        integrity_source?: "tab_switch" | "camera" | null;
+        integrity_source?: "tab_switch" | "camera" | "copy_paste" | "inspect_mode" | "logout" | "browser_back" | null;
         integrity_message?: string;
         integrity_event_count?: number | null;
       } | null;

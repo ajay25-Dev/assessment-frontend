@@ -1,4 +1,4 @@
-import { ArrowRight, FileText, UsersRound } from "lucide-react";
+import { ArrowRight, FileQuestion, FileText, UsersRound } from "lucide-react";
 import Link from "next/link";
 import { requireAdmin } from "@/lib/admin/supabase-admin";
 
@@ -41,6 +41,15 @@ export default async function AdminOverviewPage() {
       value: reports,
       icon: FileText,
       tone: "from-slate-900/8 to-slate-100",
+    },
+    {
+      href: "/admin/settings",
+      label: "Settings",
+      title: "Security controls",
+      description: "Set anti-cheat toggles, camera rules, and timer restart behavior.",
+      value: "Live",
+      icon: FileQuestion,
+      tone: "from-emerald-500/15 to-emerald-50",
     },
   ];
 
@@ -98,7 +107,9 @@ export default async function AdminOverviewPage() {
                 </span>
               </div>
               <div className="mt-6 flex items-center justify-between">
-                <p className="text-sm font-semibold text-slate-950">{card.value} total</p>
+                <p className="text-sm font-semibold text-slate-950">
+                  {typeof card.value === "number" ? `${card.value} total` : card.value}
+                </p>
                 <span className="inline-flex items-center gap-2 text-sm font-semibold text-emerald-900">
                   Open
                   <ArrowRight size={16} />

@@ -1,4 +1,4 @@
-import { Database, FileQuestion, Code2, BookOpen } from "lucide-react";
+import { Database, FileQuestion, BookOpen, Code2 } from "lucide-react";
 import Link from "next/link";
 import { sectionOrder, type AssessmentSectionId } from "@/data/assessment-bank";
 import { fetchAssessmentBank } from "@/lib/assessment-bank-api";
@@ -108,6 +108,16 @@ export default async function QuestionBankPage() {
             </tbody>
           </table>
         </div>
+      </section>
+      <section className="rounded-[8px] border border-emerald-200 bg-emerald-50 p-5 shadow-sm">
+        <p className="text-sm font-semibold uppercase tracking-[0.18em] text-emerald-800">Admin Settings</p>
+        <h3 className="mt-2 text-xl font-semibold text-slate-950">Security controls moved here</h3>
+        <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-700">
+          Use the workspace sidebar or the dashboard card to open the admin settings page for toggles like camera, copy/paste, inspect mode, and timer restart.
+        </p>
+        <Link href="/admin/settings" className="mt-4 inline-flex rounded-[8px] bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800">
+          Open Admin Settings
+        </Link>
       </section>
     </div>
   );

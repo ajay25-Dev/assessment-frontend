@@ -37,12 +37,10 @@ export async function POST(request: NextRequest) {
     client_metadata: { source_assessment_id?: string } | null;
   }>;
 
-  const matchingAttempt = rows.find((row) =>
-    row.client_metadata?.source_assessment_id === assessmentId &&
-    finalStatuses.includes(row.status || "")
-  ) || null;
+  const matchingAttempt = rows.find((row) => row.client_metadata?.source_assessment_id === assessmentId) || null;
+  const hasFinalAttempt = Boolean(matchingAttempt && finalStatuses.includes(matchingAttempt.status || ""));
 
-  const attemptId = matchingAttempt?.id || null;
+  const attemptId = hasFinalAttempt ? matchingAttempt?.id || null : null;
 
   if (attemptId) {
     return NextResponse.json({ hasAttempt: true, attemptId });

@@ -51,12 +51,12 @@ export default async function AssessmentTestPage({ searchParams }: PageProps) {
   const finalStatuses = new Set(["submitted", "auto_submitted", "disqualified"]);
   const isFinalAttempt = (row: AssessmentAttemptRow) =>
     finalStatuses.has(row.status || "") || row.client_metadata?.integrity_status === "disqualified";
-  const terminalAttempt =
+  const latestMatchingAttempt =
     attemptRows.find((row) => {
-      if (!isFinalAttempt(row)) return false;
       return assessmentId ? row.client_metadata?.source_assessment_id === assessmentId : true;
     }) || null;
 
+  const terminalAttempt = latestMatchingAttempt && isFinalAttempt(latestMatchingAttempt) ? latestMatchingAttempt : null;
   const redirectAttemptId = terminalAttempt?.id || null;
   if (redirectAttemptId) {
     redirect(`/assessment/report?attemptId=${encodeURIComponent(redirectAttemptId)}`);
