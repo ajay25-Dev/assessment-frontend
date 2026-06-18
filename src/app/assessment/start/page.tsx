@@ -57,7 +57,7 @@ const sqlItems = [
 const oopsItems = [
   "3 scenario-based OOPs design questions.",
   "Use the code editor to model classes, interfaces, and extensible designs.",
-  "Evaluation focuses on abstraction, encapsulation, polymorphism, SOLID, and error handling.",
+  "Evaluation focuses on abstraction, encapsulation, polymorphism, and SOLID principles.",
 ];
 
 type PageProps = {

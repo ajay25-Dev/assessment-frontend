@@ -649,7 +649,19 @@ export default async function DashboardPage() {
     ? Math.round(sqlEvaluations.reduce((sum, item) => sum + numberValue(item.output?.query_efficiency_score), 0) / sqlEvaluations.length)
     : 0;
   const oopsDesignScore = oopsEvaluations.length
-    ? Math.round(oopsEvaluations.reduce((sum, item) => sum + numberValue(item.output?.code_readability_score ?? item.output?.class_design_score), 0) / oopsEvaluations.length)
+    ? Math.round(
+        oopsEvaluations.reduce((sum, item) => {
+          const output = item.output || {};
+          const kpiAverage = Math.round(
+            (numberValue(output.abstraction_score) +
+              numberValue(output.encapsulation_score) +
+              numberValue(output.polymorphism_score) +
+              numberValue(output.solid_principles_score)) /
+              4,
+          );
+          return sum + kpiAverage;
+        }, 0) / oopsEvaluations.length,
+      )
     : 0;
   const mcqTopicScore = mcqEvaluations.length
     ? Math.round(mcqEvaluations.reduce((sum, item) => sum + numberValue(item.output?.overall_question_score), 0) / mcqEvaluations.length)
@@ -767,11 +779,11 @@ export default async function DashboardPage() {
       id: "kpi-code-quality",
       details: (
         <div className="space-y-3">
-          <p>Code quality is derived from readable structure, maintainability, and the quality of the implementation choices.</p>
+          <p>Code quality is derived from readable structure and the quality of the implementation choices.</p>
           <ul className="space-y-2">
             <li>Evaluator output: {dashboardCodeQuality || clampScore(latestReport.code_quality_score)}</li>
             <li>DSA code quality average: {dsaCodeQualityScore}</li>
-            <li>OOPs design / readability average: {oopsDesignScore}</li>
+            <li>OOPs KPI average: {oopsDesignScore}</li>
           </ul>
         </div>
       ),
@@ -819,10 +831,10 @@ export default async function DashboardPage() {
       id: "section-oops",
       details: (
         <div className="space-y-3">
-          <p>OOPs is explained by design quality, readability, and maintainability.</p>
+          <p>OOPs is explained by abstraction, encapsulation, polymorphism, and SOLID principles.</p>
           <ul className="space-y-2">
             <li>OOPs evaluated questions: {oopsEvaluations.length}</li>
-            <li>Design / readability average: {oopsDesignScore}</li>
+            <li>KPI average: {oopsDesignScore}</li>
             <li>Section score: {clampScore(latestReport.oops_score)}</li>
           </ul>
         </div>
