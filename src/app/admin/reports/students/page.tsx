@@ -6,6 +6,7 @@ import {
   Code2,
   Database,
   Search,
+  ShieldAlert,
   TrendingUp,
   Wrench,
 } from "lucide-react";
@@ -34,6 +35,7 @@ type ReportRow = {
   strongest_section: string | null;
   weakest_section: string | null;
   training_priority: string | null;
+  report_json?: unknown;
   created_at: string | null;
 };
 
@@ -98,6 +100,7 @@ type StudentAggregate = {
   weakest_section: string;
   high_bruteforce: boolean;
   high_hardcoding: boolean;
+  report_json: unknown;
   last_submitted: string | null;
   training_priority: string;
 };
@@ -158,6 +161,19 @@ function riskClasses(isHigh: boolean) {
   return isHigh
     ? "border-red-200 bg-red-50 text-red-800"
     : "border-slate-200 bg-slate-50 text-slate-600";
+}
+
+function isDisqualifiedReport(reportJson: unknown) {
+  const record =
+    reportJson && typeof reportJson === "object" && !Array.isArray(reportJson)
+      ? (reportJson as Record<string, unknown>)
+      : {};
+  const integrity =
+    record.integrity && typeof record.integrity === "object" && !Array.isArray(record.integrity)
+      ? (record.integrity as Record<string, unknown>)
+      : {};
+
+  return String(integrity.status || "").toLowerCase() === "disqualified";
 }
 
 function sectionIcon(section: string) {
@@ -223,6 +239,7 @@ export default async function AdminReportStudentsPage({
           "strongest_section",
           "weakest_section",
           "training_priority",
+          "report_json",
           "created_at",
         ].join(","),
       )
@@ -303,6 +320,7 @@ export default async function AdminReportStudentsPage({
       weakest_section: latest.weakest_section || "-",
       high_bruteforce: highBruteforce,
       high_hardcoding: highHardcoding,
+      report_json: latest.report_json,
       last_submitted: latest.created_at,
       training_priority: latest.training_priority || "-",
     };
@@ -469,6 +487,7 @@ export default async function AdminReportStudentsPage({
               {filteredStudents.map((student) => {
                 const StrongIcon = sectionIcon(student.strongest_section);
                 const WeakIcon = sectionIcon(student.weakest_section);
+                const isDisqualified = isDisqualifiedReport(student.report_json);
 
                 return (
                   <tr key={student.student_id} className="align-top">
@@ -499,9 +518,17 @@ export default async function AdminReportStudentsPage({
                       </div>
                     </td>
                     <td className="px-4 py-4">
-                      <span className={`inline-flex rounded-[12px] border px-2.5 py-1 text-xs font-semibold ${readinessClasses(student.latest_bucket)}`}>
-                        {student.latest_bucket}
-                      </span>
+                      <div className="flex flex-wrap gap-2">
+                        <span className={`inline-flex rounded-[12px] border px-2.5 py-1 text-xs font-semibold ${readinessClasses(student.latest_bucket)}`}>
+                          {student.latest_bucket}
+                        </span>
+                        {isDisqualified ? (
+                          <span className="inline-flex items-center gap-1 rounded-[12px] border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-800">
+                            <ShieldAlert size={13} />
+                            Disqualified
+                          </span>
+                        ) : null}
+                      </div>
                     </td>
                     <td className="px-4 py-4">
                       <div className="grid gap-2">

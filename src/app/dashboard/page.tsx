@@ -94,6 +94,7 @@ type SectionEvaluationRecord = {
 type AssessmentAttemptRow = {
   id: string;
   created_at: string | null;
+  status: string | null;
   client_metadata: {
     source_assessment_id?: string;
     integrity_status?: string;
@@ -106,7 +107,7 @@ type AvailableAssessmentCard = AvailableAssessment & {
   cardLabel: string;
   ctaLabel: string;
   ctaHref: string;
-  cardTone: "available" | "completed" | "disqualified";
+  cardTone: "available" | "in_progress" | "completed" | "disqualified";
 };
 
 function clampScore(value: number | null | undefined) {
@@ -317,6 +318,8 @@ function AvailableAssessments({ assessments }: { assessments: AvailableAssessmen
           className={`rounded-[8px] p-5 ${
             assessment.cardTone === "available"
               ? "border border-emerald-200 bg-emerald-50"
+              : assessment.cardTone === "in_progress"
+                ? "border border-amber-200 bg-amber-50"
               : assessment.cardTone === "completed"
                 ? "border border-sky-200 bg-sky-50"
                 : "border border-red-200 bg-red-50"
@@ -326,6 +329,8 @@ function AvailableAssessments({ assessments }: { assessments: AvailableAssessmen
             className={`text-sm font-semibold uppercase tracking-[0.16em] ${
               assessment.cardTone === "available"
                 ? "text-emerald-800"
+                : assessment.cardTone === "in_progress"
+                  ? "text-amber-800"
                 : assessment.cardTone === "completed"
                   ? "text-sky-800"
                   : "text-red-800"
@@ -375,6 +380,8 @@ function AvailableAssessments({ assessments }: { assessments: AvailableAssessmen
             className={`mt-5 inline-flex h-11 items-center justify-center rounded-[8px] px-5 text-sm font-semibold text-white ${
               assessment.cardTone === "available"
                 ? "bg-emerald-700 hover:bg-emerald-800"
+                : assessment.cardTone === "in_progress"
+                  ? "bg-amber-700 hover:bg-amber-800"
                 : assessment.cardTone === "completed"
                   ? "bg-sky-700 hover:bg-sky-800"
                   : "bg-red-700 hover:bg-red-800"
@@ -486,7 +493,7 @@ export default async function DashboardPage() {
 
       const { data: assessmentAttemptRows, error: assessmentAttemptError } = await serviceSupabase
         .from("student_assessment_attempts")
-        .select("id,created_at,client_metadata")
+        .select("id,created_at,status,client_metadata")
         .eq("student_id", user.id)
         .order("created_at", { ascending: false });
 
@@ -512,23 +519,42 @@ export default async function DashboardPage() {
           subjects: subjectsByAssessmentId.get(assessment.id) || [],
         };
         const latestAttempt = latestAttemptByAssessmentId.get(assessment.id) || null;
-        const isDisqualified = latestAttempt?.client_metadata?.integrity_status === "disqualified";
-        const hasCompletedAssessment = Boolean(latestAttempt?.id);
+        const latestStatus = String(latestAttempt?.status || "");
+        const isFinalAttempt =
+          ["submitted", "auto_submitted", "disqualified"].includes(latestStatus) ||
+          latestAttempt?.client_metadata?.integrity_status === "disqualified";
+        const isDisqualified = latestStatus === "disqualified" || latestAttempt?.client_metadata?.integrity_status === "disqualified";
+        const hasActiveAttempt = Boolean(latestAttempt?.id) && !isFinalAttempt;
 
         return {
           ...assessmentWithSubjects,
           attemptId: latestAttempt?.id || null,
-          cardLabel: !hasCompletedAssessment
+          cardLabel: !latestAttempt?.id
             ? "Test Available"
+            : hasActiveAttempt
+              ? "Test In Progress"
             : isDisqualified
               ? "Assessment Disqualified"
               : "Test Completed",
-          ctaLabel: !hasCompletedAssessment ? "Start Test" : isDisqualified ? "Disqualified" : "Completed",
-          ctaHref:
-            hasCompletedAssessment && latestAttempt?.id
-              ? `/assessment/report?attemptId=${encodeURIComponent(latestAttempt.id)}`
-              : `/assessment/start?assessmentId=${assessment.id}`,
-          cardTone: !hasCompletedAssessment ? "available" : isDisqualified ? "disqualified" : "completed",
+          ctaLabel: !latestAttempt?.id
+            ? "Start Test"
+            : hasActiveAttempt
+              ? "Resume Test"
+              : isDisqualified
+                ? "Disqualified"
+                : "Completed",
+          ctaHref: !latestAttempt?.id
+            ? `/assessment/start?assessmentId=${assessment.id}`
+            : hasActiveAttempt
+              ? `/assessment/test?assessmentId=${assessment.id}`
+              : `/assessment/report?attemptId=${encodeURIComponent(latestAttempt.id)}`,
+          cardTone: !latestAttempt?.id
+            ? "available"
+            : hasActiveAttempt
+              ? "in_progress"
+              : isDisqualified
+                ? "disqualified"
+                : "completed",
         };
       });
     }

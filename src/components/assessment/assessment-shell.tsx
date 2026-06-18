@@ -13,7 +13,6 @@ import {
   FileQuestion,
   Flag,
   Menu,
-  LogOut,
   PanelLeftClose,
   PanelLeftOpen,
   Play,
@@ -28,6 +27,7 @@ import { CodeEditor } from "@/components/editor/code-editor";
 import { McqPanel } from "@/components/mcq/mcq-panel";
 import { SqlResultGrid } from "@/components/sql/sql-result-grid";
 import { supabaseBrowser } from "@/lib/supabase-browser";
+import { bootstrapAssessmentSession, type AssessmentSessionState } from "@/lib/assessment-bank-api";
 import {
   getLanguageDisplayLabel,
   sectionOrder,
@@ -95,6 +95,8 @@ type DsaCalculationOutput = {
   correctnessScore: number;
   openTestCaseScore: number;
   hiddenTestCaseScore: number | "Not available";
+  bruteForceSignal: string;
+  hardcodingSignal: string;
   expectedCodeScore: number;
   approachScore: number | "Not available";
   timeComplexityScore: number | "Not available";
@@ -160,7 +162,7 @@ type OopsCalculationOutput = {
 type IntegrityViolation = {
   eventCount: number;
   message: string;
-  source: "tab_switch" | "camera";
+  source: "tab_switch" | "camera" | "copy_paste" | "inspect_mode" | "logout" | "browser_back";
 };
 
 const defaultLanguage = "python";
@@ -213,6 +215,59 @@ type SqlEvaluationOutput = {
   key_strengths?: string[];
   key_weaknesses?: string[];
   improvement_recommendation?: string;
+  calculation_trace?: SqlCalculationTrace | null;
+};
+
+type SqlCalculationTrace = {
+  result_correctness?: {
+    expected_columns?: string[];
+    actual_columns?: string[];
+    expected_rows?: Array<Record<string, string | number | boolean | null>>;
+    actual_rows?: Array<Record<string, string | number | boolean | null>>;
+    order_matters?: boolean;
+    numeric_tolerance?: number;
+  };
+  business_logic?: {
+    required_business_rules?: string[];
+    matched_business_rules?: string[];
+    missing_business_rules?: string[];
+  };
+  sql_concepts?: {
+    configured_expected_sql_concept_tags?: string[];
+    ai_returned_concept_tags?: string[];
+    matched_sql_concept_tags?: string[];
+    missing_concepts?: string[];
+  };
+  edge_cases?: {
+    configured_edge_cases?: string[];
+    matched_edge_cases?: string[];
+    missing_edge_cases?: string[];
+  };
+  query_efficiency?: {
+    formatting_score?: number;
+    alias_score?: number;
+    structure_score?: number;
+    simplicity_score?: number;
+    signals?: string[];
+  };
+  readability?: {
+    formatting_score?: number;
+    alias_score?: number;
+    structure_score?: number;
+    simplicity_score?: number;
+  };
+  null_duplicate_handling?: {
+    configured_null_rules?: string[];
+    configured_duplicate_rules?: string[];
+    matched_null_rules?: string[];
+    missing_null_rules?: string[];
+    matched_duplicate_rules?: string[];
+    missing_duplicate_rules?: string[];
+  };
+  overall?: {
+    score_weights?: Record<string, number>;
+    score_formula?: string;
+  };
 };
 
 type SqlEvaluationResponse = {
@@ -385,6 +440,450 @@ function textList(value: unknown) {
   return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : [];
 }
 
+function sqlRowList(value: unknown) {
+  return Array.isArray(value) && value.every((item) => item && typeof item === "object" && !Array.isArray(item))
+    ? (value as Array<Record<string, string | number | boolean | null>>)
+    : [];
+}
+
+function formatSqlRowPreview(rows: Array<Record<string, string | number | boolean | null>>, limit = 3) {
+  if (!rows.length) return "Not available";
+  return rows
+    .slice(0, limit)
+    .map((row) => JSON.stringify(row))
+    .join("\n");
+}
+
+function buildSqlCalculationTrace(
+  question: AssessmentQuestion,
+  sqlResult: SqlRunResponse | null,
+  evaluation: SqlEvaluationOutput | null,
+  submittedQuery: string,
+): SqlCalculationTrace | null {
+  const backendTrace = evaluation?.calculation_trace || {};
+  const questionExpectedRows = sqlRowList(question.visible_expected_rows || []);
+  const questionExpectedColumns = textList(question.expected_columns);
+  const resultRows = sqlRowList(sqlResult?.rows || []);
+  const resultColumns = textList(sqlResult?.columns);
+  const requiredBusinessRules = textList(question.required_business_rules);
+  const expectedConceptTags = textList(
+    question.expected_sql_concept_tags || question.expected_sql_concepts || [],
+  );
+  const edgeCases = textList(question.edge_cases);
+  const nullRules = textList(question.null_rules);
+  const duplicateRules = textList(question.duplicate_rules);
+
+  const calculatedQuerySignals = deriveSqlQuerySignals(submittedQuery);
+  const baseTrace = {
+    result_correctness: {
+      expected_columns:
+        backendTrace.result_correctness?.expected_columns?.length
+          ? backendTrace.result_correctness.expected_columns
+          : questionExpectedColumns.length
+            ? questionExpectedColumns
+            : questionExpectedRows.length
+              ? Object.keys(questionExpectedRows[0] || {})
+              : [],
+      actual_columns:
+        backendTrace.result_correctness?.actual_columns?.length
+          ? backendTrace.result_correctness.actual_columns
+          : resultColumns,
+      expected_rows:
+        backendTrace.result_correctness?.expected_rows?.length
+          ? backendTrace.result_correctness.expected_rows
+          : questionExpectedRows,
+      actual_rows:
+        backendTrace.result_correctness?.actual_rows?.length
+          ? backendTrace.result_correctness.actual_rows
+          : resultRows,
+      order_matters:
+        backendTrace.result_correctness?.order_matters ??
+        Boolean(question.result_match?.order_matters),
+      numeric_tolerance:
+        backendTrace.result_correctness?.numeric_tolerance ??
+        Number(question.result_match?.numeric_tolerance ?? 0.01),
+    },
+    business_logic: {
+      required_business_rules:
+        backendTrace.business_logic?.required_business_rules?.length
+          ? backendTrace.business_logic.required_business_rules
+          : requiredBusinessRules,
+      matched_business_rules:
+        backendTrace.business_logic?.matched_business_rules?.length
+          ? backendTrace.business_logic.matched_business_rules
+          : requiredBusinessRules.filter(
+              (rule) => !textList(backendTrace.business_logic?.missing_business_rules).includes(rule),
+            ),
+      missing_business_rules:
+        backendTrace.business_logic?.missing_business_rules?.length
+          ? backendTrace.business_logic.missing_business_rules
+          : [],
+    },
+    sql_concepts: {
+      configured_expected_sql_concept_tags:
+        backendTrace.sql_concepts?.configured_expected_sql_concept_tags?.length
+          ? backendTrace.sql_concepts.configured_expected_sql_concept_tags
+          : expectedConceptTags,
+      ai_returned_concept_tags:
+        backendTrace.sql_concepts?.ai_returned_concept_tags?.length
+          ? backendTrace.sql_concepts.ai_returned_concept_tags
+          : textList(evaluation?.ai_returned_concept_tags),
+      matched_sql_concept_tags:
+        backendTrace.sql_concepts?.matched_sql_concept_tags?.length
+          ? backendTrace.sql_concepts.matched_sql_concept_tags
+          : textList(evaluation?.expected_sql_concept_tags),
+      missing_concepts:
+        backendTrace.sql_concepts?.missing_concepts?.length
+          ? backendTrace.sql_concepts.missing_concepts
+          : textList(evaluation?.missing_concepts),
+    },
+    edge_cases: {
+      configured_edge_cases:
+        backendTrace.edge_cases?.configured_edge_cases?.length
+          ? backendTrace.edge_cases.configured_edge_cases
+          : edgeCases,
+      matched_edge_cases:
+        backendTrace.edge_cases?.matched_edge_cases?.length
+          ? backendTrace.edge_cases.matched_edge_cases
+          : edgeCases.filter((rule) => !textList(backendTrace.edge_cases?.missing_edge_cases).includes(rule)),
+      missing_edge_cases:
+        backendTrace.edge_cases?.missing_edge_cases?.length
+          ? backendTrace.edge_cases.missing_edge_cases
+          : [],
+    },
+    query_efficiency: {
+      formatting_score:
+        backendTrace.query_efficiency?.formatting_score ?? Number(evaluation?.formatting_score ?? 0),
+      alias_score:
+        backendTrace.query_efficiency?.alias_score ?? Number(evaluation?.alias_score ?? 0),
+      structure_score:
+        backendTrace.query_efficiency?.structure_score ?? Number(evaluation?.structure_score ?? 0),
+      simplicity_score:
+        backendTrace.query_efficiency?.simplicity_score ?? Number(evaluation?.simplicity_score ?? 0),
+      signals:
+        backendTrace.query_efficiency?.signals?.length
+          ? backendTrace.query_efficiency.signals
+          : calculatedQuerySignals,
+    },
+    readability: {
+      formatting_score:
+        backendTrace.readability?.formatting_score ?? Number(evaluation?.formatting_score ?? 0),
+      alias_score:
+        backendTrace.readability?.alias_score ?? Number(evaluation?.alias_score ?? 0),
+      structure_score:
+        backendTrace.readability?.structure_score ?? Number(evaluation?.structure_score ?? 0),
+      simplicity_score:
+        backendTrace.readability?.simplicity_score ?? Number(evaluation?.simplicity_score ?? 0),
+    },
+    null_duplicate_handling: {
+      configured_null_rules:
+        backendTrace.null_duplicate_handling?.configured_null_rules?.length
+          ? backendTrace.null_duplicate_handling.configured_null_rules
+          : nullRules,
+      configured_duplicate_rules:
+        backendTrace.null_duplicate_handling?.configured_duplicate_rules?.length
+          ? backendTrace.null_duplicate_handling.configured_duplicate_rules
+          : duplicateRules,
+      matched_null_rules:
+        backendTrace.null_duplicate_handling?.matched_null_rules?.length
+          ? backendTrace.null_duplicate_handling.matched_null_rules
+          : nullRules.filter(
+              (rule) => !textList(backendTrace.null_duplicate_handling?.missing_null_rules).includes(rule),
+            ),
+      missing_null_rules:
+        backendTrace.null_duplicate_handling?.missing_null_rules?.length
+          ? backendTrace.null_duplicate_handling.missing_null_rules
+          : [],
+      matched_duplicate_rules:
+        backendTrace.null_duplicate_handling?.matched_duplicate_rules?.length
+          ? backendTrace.null_duplicate_handling.matched_duplicate_rules
+          : duplicateRules.filter(
+              (rule) => !textList(backendTrace.null_duplicate_handling?.missing_duplicate_rules).includes(rule),
+            ),
+      missing_duplicate_rules:
+        backendTrace.null_duplicate_handling?.missing_duplicate_rules?.length
+          ? backendTrace.null_duplicate_handling.missing_duplicate_rules
+          : [],
+    },
+    overall: {
+      score_weights:
+        backendTrace.overall?.score_weights || {
+          result_correctness: 30,
+          business_logic: 20,
+          sql_concept: 15,
+          edge_case: 10,
+          query_efficiency: 10,
+          readability: 5,
+          null_duplicate_handling: 10,
+        },
+      score_formula:
+        backendTrace.overall?.score_formula ||
+        "(result correctness x 30 + business logic x 20 + SQL concepts x 15 + edge cases x 10 + query efficiency x 10 + readability x 5 + NULL/duplicate handling x 10) / 100",
+    },
+  };
+
+  const hasAnyTrace =
+    baseTrace.result_correctness.expected_columns.length ||
+    baseTrace.result_correctness.actual_columns.length ||
+    baseTrace.result_correctness.expected_rows.length ||
+    baseTrace.result_correctness.actual_rows.length ||
+    baseTrace.business_logic.required_business_rules.length ||
+    baseTrace.sql_concepts.configured_expected_sql_concept_tags.length ||
+    baseTrace.edge_cases.configured_edge_cases.length ||
+    baseTrace.query_efficiency.signals.length ||
+    baseTrace.null_duplicate_handling.configured_null_rules.length ||
+    baseTrace.null_duplicate_handling.configured_duplicate_rules.length;
+
+  return hasAnyTrace ? baseTrace : null;
+}
+
+function deriveSqlQuerySignals(submittedQuery: string) {
+  const normalized = String(submittedQuery || "").toLowerCase();
+  const signals: string[] = [];
+  if (!normalized.trim()) return signals;
+  if (/\bwith\b/i.test(normalized)) signals.push("CTE bonus");
+  if (/\bwhere\b/i.test(normalized)) signals.push("Early filter bonus");
+  if (/\bgroup\s+by\b/i.test(normalized)) signals.push("Aggregation bonus");
+  if (/\bleft\s+join\b/i.test(normalized) || /not\s+exists/i.test(normalized)) {
+    signals.push("Anti-join bonus");
+  }
+  if (/\bselect\s+\*/i.test(normalized)) signals.push("SELECT * penalty");
+  const repeatedFromCount = (normalized.match(/\bfrom\b/g) || []).length;
+  if (repeatedFromCount > 1) signals.push("Repeated scan penalty");
+  return signals;
+}
+
+function renderSqlKpiDetails(label: string, trace: SqlCalculationTrace | null) {
+  if (!trace) return null;
+
+  if (label === "Result correctness") {
+    return (
+      <div className="mt-2 space-y-1 text-[11px] leading-5 text-sky-100/80">
+        <div>
+          Expected columns:{" "}
+          {trace.result_correctness?.expected_columns?.length
+            ? trace.result_correctness.expected_columns.join(", ")
+            : "Not available"}
+        </div>
+        <div>
+          Output columns:{" "}
+          {trace.result_correctness?.actual_columns?.length
+            ? trace.result_correctness.actual_columns.join(", ")
+            : "Not available"}
+        </div>
+        <div>Expected rows: {trace.result_correctness?.expected_rows?.length ?? 0}</div>
+        <div>Output rows: {trace.result_correctness?.actual_rows?.length ?? 0}</div>
+        <div>Order matters: {trace.result_correctness?.order_matters ? "Yes" : "No"}</div>
+        <div>
+          Numeric tolerance: {typeof trace.result_correctness?.numeric_tolerance === "number"
+            ? trace.result_correctness.numeric_tolerance
+            : "Not available"}
+        </div>
+        <details className="rounded-[8px] border border-sky-700/20 bg-slate-950/40 px-2 py-1">
+          <summary className="cursor-pointer text-[10px] font-semibold uppercase tracking-[0.12em] text-sky-200">
+            Row preview
+          </summary>
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            <div>
+              <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-sky-200">
+                Expected rows
+              </div>
+              <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words text-[10px] leading-4 text-sky-100">
+                {formatSqlRowPreview(trace.result_correctness?.expected_rows || [])}
+              </pre>
+            </div>
+            <div>
+              <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-sky-200">
+                Output rows
+              </div>
+              <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words text-[10px] leading-4 text-sky-100">
+                {formatSqlRowPreview(trace.result_correctness?.actual_rows || [])}
+              </pre>
+            </div>
+          </div>
+        </details>
+      </div>
+    );
+  }
+
+  if (label === "Business logic") {
+    return (
+      <div className="mt-2 space-y-1 text-[11px] leading-5 text-sky-100/80">
+        <div>
+          Required rules:{" "}
+          {trace.business_logic?.required_business_rules?.length
+            ? trace.business_logic.required_business_rules.join(", ")
+            : "Not available"}
+        </div>
+        <div>
+          Matched rules:{" "}
+          {trace.business_logic?.matched_business_rules?.length
+            ? trace.business_logic.matched_business_rules.join(", ")
+            : "None"}
+        </div>
+        <div>
+          Missing rules:{" "}
+          {trace.business_logic?.missing_business_rules?.length
+            ? trace.business_logic.missing_business_rules.join(", ")
+            : "None"}
+        </div>
+      </div>
+    );
+  }
+
+  if (label === "SQL concepts") {
+    return (
+      <div className="mt-2 space-y-1 text-[11px] leading-5 text-sky-100/80">
+        <div>
+          Configured tags:{" "}
+          {trace.sql_concepts?.configured_expected_sql_concept_tags?.length
+            ? trace.sql_concepts.configured_expected_sql_concept_tags.join(", ")
+            : "Not available"}
+        </div>
+        <div>
+          AI tags:{" "}
+          {trace.sql_concepts?.ai_returned_concept_tags?.length
+            ? trace.sql_concepts.ai_returned_concept_tags.join(", ")
+            : "None"}
+        </div>
+        <div>
+          Matched tags:{" "}
+          {trace.sql_concepts?.matched_sql_concept_tags?.length
+            ? trace.sql_concepts.matched_sql_concept_tags.join(", ")
+            : "None"}
+        </div>
+        <div>
+          Missing tags:{" "}
+          {trace.sql_concepts?.missing_concepts?.length
+            ? trace.sql_concepts.missing_concepts.join(", ")
+            : "None"}
+        </div>
+      </div>
+    );
+  }
+
+  if (label === "Edge cases") {
+    return (
+      <div className="mt-2 space-y-1 text-[11px] leading-5 text-sky-100/80">
+        <div>
+          Configured edge cases:{" "}
+          {trace.edge_cases?.configured_edge_cases?.length
+            ? trace.edge_cases.configured_edge_cases.join(", ")
+            : "Not available"}
+        </div>
+        <div>
+          Matched edge cases:{" "}
+          {trace.edge_cases?.matched_edge_cases?.length
+            ? trace.edge_cases.matched_edge_cases.join(", ")
+            : "None"}
+        </div>
+        <div>
+          Missing edge cases:{" "}
+          {trace.edge_cases?.missing_edge_cases?.length
+            ? trace.edge_cases.missing_edge_cases.join(", ")
+            : "None"}
+        </div>
+      </div>
+    );
+  }
+
+  if (label === "Query efficiency") {
+    return (
+      <div className="mt-2 space-y-1 text-[11px] leading-5 text-sky-100/80">
+        <div>Formatting score: {trace.query_efficiency?.formatting_score ?? "Not available"}%</div>
+        <div>Alias score: {trace.query_efficiency?.alias_score ?? "Not available"}%</div>
+        <div>Structure score: {trace.query_efficiency?.structure_score ?? "Not available"}%</div>
+        <div>Simplicity score: {trace.query_efficiency?.simplicity_score ?? "Not available"}%</div>
+        <div>
+          Signals: {trace.query_efficiency?.signals?.length
+            ? trace.query_efficiency.signals.join(", ")
+            : "Not available"}
+        </div>
+      </div>
+    );
+  }
+
+  if (label === "Readability") {
+    return (
+      <div className="mt-2 space-y-1 text-[11px] leading-5 text-sky-100/80">
+        <div>Formatting score: {trace.readability?.formatting_score ?? "Not available"}%</div>
+        <div>Alias score: {trace.readability?.alias_score ?? "Not available"}%</div>
+        <div>Structure score: {trace.readability?.structure_score ?? "Not available"}%</div>
+        <div>Simplicity score: {trace.readability?.simplicity_score ?? "Not available"}%</div>
+      </div>
+    );
+  }
+
+  if (label === "NULL / duplicate handling") {
+    return (
+      <div className="mt-2 space-y-1 text-[11px] leading-5 text-sky-100/80">
+        <div>
+          NULL rules:{" "}
+          {trace.null_duplicate_handling?.configured_null_rules?.length
+            ? trace.null_duplicate_handling.configured_null_rules.join(", ")
+            : "Not available"}
+        </div>
+        <div>
+          Matched NULL rules:{" "}
+          {trace.null_duplicate_handling?.matched_null_rules?.length
+            ? trace.null_duplicate_handling.matched_null_rules.join(", ")
+            : "None"}
+        </div>
+        <div>
+          Missing NULL rules:{" "}
+          {trace.null_duplicate_handling?.missing_null_rules?.length
+            ? trace.null_duplicate_handling.missing_null_rules.join(", ")
+            : "None"}
+        </div>
+        <div>
+          Duplicate rules:{" "}
+          {trace.null_duplicate_handling?.configured_duplicate_rules?.length
+            ? trace.null_duplicate_handling.configured_duplicate_rules.join(", ")
+            : "Not available"}
+        </div>
+        <div>
+          Matched duplicate rules:{" "}
+          {trace.null_duplicate_handling?.matched_duplicate_rules?.length
+            ? trace.null_duplicate_handling.matched_duplicate_rules.join(", ")
+            : "None"}
+        </div>
+        <div>
+          Missing duplicate rules:{" "}
+          {trace.null_duplicate_handling?.missing_duplicate_rules?.length
+            ? trace.null_duplicate_handling.missing_duplicate_rules.join(", ")
+            : "None"}
+        </div>
+      </div>
+    );
+  }
+
+  if (label === "Overall question score") {
+    return (
+      <div className="mt-2 space-y-1 text-[11px] leading-5 text-sky-100/80">
+        <div>{trace.overall?.score_formula || "Not available"}</div>
+        <div>
+          Weights:{" "}
+          {trace.overall?.score_weights
+            ? Object.entries(trace.overall.score_weights)
+                .map(([key, value]) => `${key}=${value}`)
+                .join(", ")
+            : "Not available"}
+        </div>
+      </div>
+    );
+  }
+
+  if (label === "Formatting" || label === "Alias" || label === "Structure" || label === "Simplicity") {
+    return (
+      <div className="mt-2 text-[11px] leading-5 text-sky-100/80">
+        Component score used in readability and query-efficiency calculations.
+      </div>
+    );
+  }
+
+  return null;
+}
+
 function stripTransientAnswerData(answer: AnswerState): AnswerState {
   return {
     ...answer,
@@ -534,6 +1033,8 @@ function buildDsaCalculationOutput(
     : hiddenTotal > 0
       ? scoreRatio(hiddenPassed, hiddenTotal)
       : "Not available";
+  const bruteForceSignal = String(backendOutput.brute_force_signal || "Not available");
+  const hardcodingSignal = String(backendOutput.hardcoding_signal || "Not available");
   const correctnessScore = typeof backendOutput.correctness_score === "number"
     ? backendOutput.correctness_score
     : openTestCaseScore;
@@ -653,6 +1154,8 @@ function buildDsaCalculationOutput(
     correctnessScore,
     openTestCaseScore,
     hiddenTestCaseScore,
+    bruteForceSignal,
+    hardcodingSignal,
     expectedCodeScore: expectedCodeBreakdown.score,
     approachScore: approach,
     timeComplexityScore,
@@ -913,15 +1416,43 @@ function loadInitialSnapshot(assessmentBank: AssessmentBank) {
     activeSection: initialTiming.activeSection,
     sectionRemainingSeconds: initialTiming.sectionRemainingSeconds,
     remainingSeconds: initialTiming.totalRemainingSeconds,
+    startedAt: null as string | null,
+    timerPolicy: "resume_on_login" as "restart_on_login" | "resume_on_login",
     tabEvents: 0,
     cameraEvents: 0,
+    logoutCount: 0,
     persistedAttemptId: null as string | null,
   };
+}
+
+function sectionTimingForRemaining(assessmentBank: AssessmentBank, remainingSeconds: number) {
+  const totalSeconds = Object.values(sectionDurations(assessmentBank)).reduce((sum, value) => sum + value * 60, 0);
+  const elapsedSeconds = Math.max(0, totalSeconds - Math.max(0, remainingSeconds));
+  return sectionTimingForElapsed(assessmentBank, elapsedSeconds);
+}
+
+function resolveAssessmentStartedAt(storageKey: string, sessionStartedAt: string | null) {
+  if (sessionStartedAt) return sessionStartedAt;
+  if (typeof window === "undefined") return null;
+  return window.localStorage.getItem(`${storageKey}:startedAt`);
+}
+
+function isInspectModeShortcut(event: KeyboardEvent) {
+  if (event.key === "F12") return true;
+  if (!(event.ctrlKey || event.metaKey)) return false;
+  const key = event.key.toLowerCase();
+  return event.shiftKey ? ["i", "j", "c", "p"].includes(key) : key === "u";
+}
+
+function isCopyPasteShortcut(event: KeyboardEvent) {
+  if (!(event.ctrlKey || event.metaKey)) return false;
+  return ["c", "v", "x", "a"].includes(event.key.toLowerCase());
 }
 
 function loadSavedSnapshot(assessmentBank: AssessmentBank, assessmentInstanceId?: string, studentId?: string) {
   const questions = assessmentBank.questions;
   const storageKey = storageKeyForBank(assessmentBank, assessmentInstanceId, studentId);
+  const logoutCountKey = `${storageKey}:logoutCount`;
   const attemptIdKey = `${storageKey}:attemptId`;
   const fallback = loadInitialSnapshot(assessmentBank);
   if (typeof window === "undefined") return fallback;
@@ -930,6 +1461,7 @@ function loadSavedSnapshot(assessmentBank: AssessmentBank, assessmentInstanceId?
   if (studentId && storageKey.includes(":anonymous:")) {
     window.localStorage.removeItem(storageKey);
     window.localStorage.removeItem(`${storageKey}:startedAt`);
+    window.localStorage.removeItem(`${storageKey}:logoutCount`);
     return fallback;
   }
 
@@ -944,13 +1476,18 @@ function loadSavedSnapshot(assessmentBank: AssessmentBank, assessmentInstanceId?
       activeQuestionId?: string;
       activeSection?: AssessmentSectionId;
       startedAt?: string;
+      timerPolicy?: "restart_on_login" | "resume_on_login";
       tabEvents?: number;
       cameraEvents?: number;
+      logoutCount?: number;
     };
     const startedAt = parsed.startedAt || window.localStorage.getItem(`${storageKey}:startedAt`);
     const elapsed = startedAt ? Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000) : 0;
     const timing = sectionTimingForElapsed(assessmentBank, elapsed);
     const persistedAttemptId = window.localStorage.getItem(attemptIdKey);
+    const logoutCount = Number(
+      window.localStorage.getItem(logoutCountKey) || parsed.logoutCount || 0,
+    );
     const savedActiveQuestion = parsed.activeQuestionId
       ? questions.find((question) => question.id === parsed.activeQuestionId)
       : null;
@@ -961,13 +1498,17 @@ function loadSavedSnapshot(assessmentBank: AssessmentBank, assessmentInstanceId?
       activeSection,
       sectionRemainingSeconds: timing.sectionRemainingSeconds,
       remainingSeconds: timing.totalRemainingSeconds,
+      startedAt,
+      timerPolicy: parsed.timerPolicy || "resume_on_login",
       tabEvents: parsed.tabEvents || 0,
       cameraEvents: parsed.cameraEvents || 0,
+      logoutCount,
       persistedAttemptId,
     };
   } catch {
     window.localStorage.removeItem(storageKey);
     window.localStorage.removeItem(attemptIdKey);
+    window.localStorage.removeItem(`${storageKey}:logoutCount`);
     return fallback;
   }
 }
@@ -985,6 +1526,7 @@ export function AssessmentShell({
   const authClient = useMemo(() => supabaseBrowser(), []);
   const questions = assessmentBank.questions;
   const storageKey = storageKeyForBank(assessmentBank, assessmentInstanceId, studentId);
+  const logoutCountKey = `${storageKey}:logoutCount`;
   const legacyStorageKey = `joraiq-assessment:${assessmentStorageScope(assessmentBank, assessmentInstanceId)}`;
 
   const [initialSnapshot] = useState(() => loadInitialSnapshot(assessmentBank));
@@ -995,6 +1537,8 @@ export function AssessmentShell({
   const [activeSection, setActiveSection] = useState<AssessmentSectionId>(initialSnapshot.activeSection);
   const [sectionRemainingSeconds, setSectionRemainingSeconds] = useState(initialSnapshot.sectionRemainingSeconds);
   const [remainingSeconds, setRemainingSeconds] = useState(initialSnapshot.remainingSeconds);
+  const [sessionStartedAt, setSessionStartedAt] = useState<string | null>(initialSnapshot.startedAt);
+  const [sessionTimerPolicy, setSessionTimerPolicy] = useState<"restart_on_login" | "resume_on_login">(initialSnapshot.timerPolicy);
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [hasHydrated, setHasHydrated] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
@@ -1002,6 +1546,7 @@ export function AssessmentShell({
   const [activeTab, setActiveTab] = useState<ActiveTab>("answer");
   const [tabEvents, setTabEvents] = useState(initialTabEvents);
   const [cameraEvents, setCameraEvents] = useState(initialCameraEvents);
+  const [logoutCount, setLogoutCount] = useState(localProctoringDisabled ? 0 : initialSnapshot.logoutCount);
   const [persistedAttemptId, setPersistedAttemptId] = useState<string | null>(initialSnapshot.persistedAttemptId);
   const [persistedDsaEvaluationByQuestion, setPersistedDsaEvaluationByQuestion] = useState<Record<string, Record<string, unknown> | null>>({});
   const [isExecuting, setIsExecuting] = useState(false);
@@ -1038,7 +1583,9 @@ export function AssessmentShell({
   const cameraVideoRef = useRef<HTMLVideoElement>(null);
   const autoSubmitStartedRef = useRef(false);
   const pendingTabWarningRef = useRef<number | null>(null);
+  const pendingBackWarningRef = useRef<number | null>(null);
   const cameraDragRef = useRef<{ pointerId: number; offsetX: number; offsetY: number } | null>(null);
+  const sessionBootstrapRef = useRef(false);
 
   const activeIndex = questions.findIndex((question) => question.id === activeQuestionId);
   const activeQuestion = questions[Math.max(0, activeIndex)];
@@ -1049,6 +1596,12 @@ export function AssessmentShell({
   const activeSectionQuestionNumber = activeSectionQuestionIndex >= 0 ? activeSectionQuestionIndex + 1 : activeIndex + 1;
   const activeTemporaryScorePreview = temporaryScorePreviewByQuestion[activeQuestion.id];
   const activeSqlEvaluationOutput = sqlEvaluationByQuestion[activeQuestion.id] || null;
+  const activeSqlCalculationTrace = buildSqlCalculationTrace(
+    activeQuestion,
+    sqlResult,
+    activeSqlEvaluationOutput,
+    activeAnswer.value,
+  );
   const activeOopsCalculationOutput = buildOopsCalculationOutput(
     activeQuestion,
     activeAnswer,
@@ -1070,6 +1623,25 @@ export function AssessmentShell({
     if (legacyType === 1) return "reload";
     return "navigate";
   }, []);
+  const assessmentSecurity = useMemo(() => {
+    const configured = assessmentBank.assessment.security;
+    const envTabEnabled = publicEnvEnabled(process.env.NEXT_PUBLIC_ASSESSMENT_TAB_SECURITY_ENABLED);
+    const envTabMaxEvents = publicEnvNumber(process.env.NEXT_PUBLIC_ASSESSMENT_TAB_SECURITY_MAX_EVENTS);
+    const envCameraEnabled = publicEnvEnabled(process.env.NEXT_PUBLIC_ASSESSMENT_CAMERA_PROCTORING_ENABLED);
+    const envCameraMaxEvents = publicEnvNumber(process.env.NEXT_PUBLIC_ASSESSMENT_CAMERA_MAX_EVENTS);
+
+    return {
+      tabSwitchProtectionEnabled: envTabEnabled ?? configured?.tab_switch_protection_enabled ?? true,
+      maxTabSwitchEvents: envTabMaxEvents ?? configured?.max_tab_switch_events ?? 2,
+      autoSubmitOnMaxEvents: configured?.auto_submit_on_max_events ?? true,
+      cameraProctoringEnabled: envCameraEnabled ?? configured?.camera_proctoring_enabled ?? false,
+      maxCameraEvents: envCameraMaxEvents ?? configured?.max_camera_events ?? 1,
+      autoSubmitOnCameraEvents: configured?.auto_submit_on_camera_events ?? true,
+      copyPasteBlockEnabled: configured?.copy_paste_block_enabled ?? true,
+      inspectModeBlockEnabled: configured?.inspect_mode_block_enabled ?? true,
+      restartTimerOnLogin: configured?.restart_timer_on_login ?? true,
+    };
+  }, [assessmentBank.assessment.security]);
   const tabSecurity = useMemo(() => {
     if (localProctoringDisabled) {
       return {
@@ -1078,16 +1650,12 @@ export function AssessmentShell({
         autoSubmitOnMax: false,
       };
     }
-
-    const configured = assessmentBank.assessment.security;
-    const envEnabled = publicEnvEnabled(process.env.NEXT_PUBLIC_ASSESSMENT_TAB_SECURITY_ENABLED);
-    const envMaxEvents = publicEnvNumber(process.env.NEXT_PUBLIC_ASSESSMENT_TAB_SECURITY_MAX_EVENTS);
     return {
-      enabled: envEnabled ?? configured?.tab_switch_protection_enabled ?? true,
-      maxEvents: envMaxEvents ?? configured?.max_tab_switch_events ?? 2,
-      autoSubmitOnMax: configured?.auto_submit_on_max_events ?? true,
+      enabled: assessmentSecurity.tabSwitchProtectionEnabled,
+      maxEvents: assessmentSecurity.maxTabSwitchEvents,
+      autoSubmitOnMax: assessmentSecurity.autoSubmitOnMaxEvents,
     };
-  }, [assessmentBank.assessment.security]);
+  }, [assessmentSecurity]);
   const cameraSecurity = useMemo(() => {
     if (localProctoringDisabled) {
       return {
@@ -1096,16 +1664,12 @@ export function AssessmentShell({
         autoSubmitOnMax: false,
       };
     }
-
-    const configured = assessmentBank.assessment.security;
-    const envEnabled = publicEnvEnabled(process.env.NEXT_PUBLIC_ASSESSMENT_CAMERA_PROCTORING_ENABLED);
-    const envMaxEvents = publicEnvNumber(process.env.NEXT_PUBLIC_ASSESSMENT_CAMERA_MAX_EVENTS);
     return {
-      enabled: envEnabled ?? configured?.camera_proctoring_enabled ?? false,
-      maxEvents: envMaxEvents ?? configured?.max_camera_events ?? 1,
-      autoSubmitOnMax: configured?.auto_submit_on_camera_events ?? true,
+      enabled: assessmentSecurity.cameraProctoringEnabled,
+      maxEvents: assessmentSecurity.maxCameraEvents,
+      autoSubmitOnMax: assessmentSecurity.autoSubmitOnCameraEvents,
     };
-  }, [assessmentBank.assessment.security]);
+  }, [assessmentSecurity]);
   const canRunAssessment = !cameraSecurity.enabled || Boolean(cameraStream);
 
   useEffect(() => {
@@ -1118,14 +1682,73 @@ export function AssessmentShell({
       setActiveSection(savedSnapshot.activeSection);
       setSectionRemainingSeconds(savedSnapshot.sectionRemainingSeconds);
       setRemainingSeconds(savedSnapshot.remainingSeconds);
+      setSessionStartedAt(savedSnapshot.startedAt);
+      setSessionTimerPolicy(savedSnapshot.timerPolicy);
       setTabEvents(localProctoringDisabled ? 0 : savedSnapshot.tabEvents);
       setCameraEvents(localProctoringDisabled ? 0 : savedSnapshot.cameraEvents);
+      setLogoutCount(localProctoringDisabled ? 0 : savedSnapshot.logoutCount);
       setPersistedAttemptId(savedSnapshot.persistedAttemptId || null);
       setHasHydrated(true);
     }, 0);
 
     return () => window.clearTimeout(timer);
   }, [assessmentBank, assessmentInstanceId, legacyStorageKey, studentId]);
+
+  useEffect(() => {
+    if (!hasHydrated || !studentId || sessionBootstrapRef.current) return;
+
+    const persistedStateExists =
+      Boolean(localStorage.getItem(storageKey)) &&
+      Boolean(localStorage.getItem(`${storageKey}:startedAt`)) &&
+      Boolean(localStorage.getItem(`${storageKey}:attemptId`));
+
+    if (persistedStateExists) return;
+
+    sessionBootstrapRef.current = true;
+    let cancelled = false;
+
+    void bootstrapAssessmentSession({
+      assessment_id: assessmentInstanceId || assessmentBank.assessment.id,
+      student_id: studentId,
+    })
+      .then((session) => {
+        if (cancelled) return;
+
+        setPersistedAttemptId(session.attempt_id);
+        setSessionStartedAt(session.started_at);
+        setSessionTimerPolicy(session.timer_policy);
+        setLogoutCount(session.session_reset_count);
+        const timing = sectionTimingForRemaining(assessmentBank, session.remaining_seconds);
+        setActiveSection(timing.activeSection);
+        setSectionRemainingSeconds(timing.sectionRemainingSeconds);
+        setRemainingSeconds(session.remaining_seconds);
+        setActiveQuestionId(firstQuestionInSection(questions, timing.activeSection));
+
+        localStorage.setItem(`${storageKey}:startedAt`, session.started_at);
+        localStorage.setItem(`${storageKey}:attemptId`, session.attempt_id);
+        localStorage.setItem(logoutCountKey, String(session.session_reset_count));
+        localStorage.setItem(
+          storageKey,
+          JSON.stringify({
+            answers: sanitizeAnswersForStorage(answers),
+            activeQuestionId: firstQuestionInSection(questions, timing.activeSection),
+            activeSection: timing.activeSection,
+            startedAt: session.started_at,
+            timerPolicy: session.timer_policy,
+            tabEvents: 0,
+            cameraEvents: 0,
+            savedAt: new Date().toISOString(),
+          }),
+        );
+      })
+      .catch(() => {
+        sessionBootstrapRef.current = false;
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [assessmentBank, assessmentInstanceId, answers, hasHydrated, logoutCountKey, questions, sessionStartedAt, storageKey, studentId]);
 
   const questionsBySection = useMemo(
     () =>
@@ -1155,15 +1778,10 @@ export function AssessmentShell({
   );
 
   useEffect(() => {
-    if (!hasHydrated || !canRunAssessment) return;
-
-    if (!localStorage.getItem(`${storageKey}:startedAt`)) {
-      localStorage.setItem(`${storageKey}:startedAt`, new Date().toISOString());
-    }
+    if (!hasHydrated || !canRunAssessment || !sessionStartedAt) return;
 
     const interval = window.setInterval(() => {
-      const startedAt = localStorage.getItem(`${storageKey}:startedAt`);
-      const elapsed = startedAt ? Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000) : 0;
+      const elapsed = Math.floor((Date.now() - new Date(sessionStartedAt).getTime()) / 1000);
       const timing = sectionTimingForElapsed(assessmentBank, elapsed);
 
       setSectionRemainingSeconds(timing.sectionRemainingSeconds);
@@ -1171,26 +1789,22 @@ export function AssessmentShell({
     }, 1000);
 
     return () => window.clearInterval(interval);
-  }, [assessmentBank, canRunAssessment, hasHydrated, questions, storageKey]);
+  }, [assessmentBank, canRunAssessment, hasHydrated, sessionStartedAt]);
 
   useEffect(() => {
-    if (!hasHydrated || !canRunAssessment) return;
+    if (!hasHydrated || !canRunAssessment || !sessionStartedAt) return;
 
     const interval = window.setInterval(() => {
       const existing = localStorage.getItem(storageKey);
-      let startedAt = localStorage.getItem(`${storageKey}:startedAt`);
-      if (!startedAt) {
-        startedAt = new Date().toISOString();
-        localStorage.setItem(`${storageKey}:startedAt`, startedAt);
-      }
 
       localStorage.setItem(
         storageKey,
         JSON.stringify({
-          ...(existing ? JSON.parse(existing) : {}),
+          ...(existing ? JSON.parse(existing) : {}), 
           answers: sanitizeAnswersForStorage(answers),
           activeQuestionId,
-          startedAt,
+          startedAt: sessionStartedAt,
+          timerPolicy: sessionTimerPolicy,
           activeSection,
           tabEvents,
           cameraEvents,
@@ -1201,7 +1815,7 @@ export function AssessmentShell({
     }, 6000);
 
     return () => window.clearInterval(interval);
-  }, [activeQuestionId, activeSection, answers, cameraEvents, canRunAssessment, hasHydrated, storageKey, tabEvents]);
+  }, [activeQuestionId, activeSection, answers, cameraEvents, canRunAssessment, hasHydrated, sessionStartedAt, sessionTimerPolicy, storageKey, tabEvents]);
 
   const updateActiveAnswer = useCallback((patch: Partial<AnswerState>) => {
     setAnswers((current) => ({
@@ -1243,6 +1857,26 @@ export function AssessmentShell({
         : `Tab/window switch ${count} detected. The assessment has been disqualified.`;
     }
 
+    if (source === "copy_paste") {
+      return "Copying or pasting content is disabled for this assessment.";
+    }
+
+    if (source === "inspect_mode") {
+      return "Developer tools and inspect shortcuts are disabled for this assessment.";
+    }
+
+    if (source === "logout") {
+      return count === 1
+        ? "You signed out during the assessment. Your timer will resume when you sign back in."
+        : `Multiple sign-outs (${count}) were detected during the assessment. This attempt has been disqualified.`;
+    }
+
+    if (source === "browser_back") {
+      return count === 1
+        ? "Using the browser back button during the assessment is not allowed. Pressing it again will disqualify this attempt."
+        : "Using the browser back button during the assessment is disabled. This attempt has been disqualified.";
+    }
+
     return count === 1
       ? "Camera interruption was detected. Do not do it again or you will be disqualified."
       : `Camera warning ${count} detected. The assessment has been disqualified.`;
@@ -1282,8 +1916,8 @@ export function AssessmentShell({
         video: true,
         audio: false,
       });
-      if (!localStorage.getItem(`${storageKey}:startedAt`)) {
-        localStorage.setItem(`${storageKey}:startedAt`, new Date().toISOString());
+      if (!localStorage.getItem(`${storageKey}:startedAt`) && sessionStartedAt) {
+        localStorage.setItem(`${storageKey}:startedAt`, sessionStartedAt);
       }
       setCameraStream(stream);
     } catch (error) {
@@ -1291,7 +1925,7 @@ export function AssessmentShell({
     } finally {
       setIsRequestingCamera(false);
     }
-  }, [cameraSecurity.enabled, storageKey]);
+  }, [cameraSecurity.enabled, sessionStartedAt, storageKey]);
 
   const cameraPositionKey = `${storageKey}:cameraPosition`;
 
@@ -1371,6 +2005,7 @@ export function AssessmentShell({
     const {
       data: { session },
     } = await authClient.auth.getSession();
+    const startedAt = resolveAssessmentStartedAt(storageKey, sessionStartedAt) || new Date().toISOString();
     const response = await fetch(`/api/assessment/question/${sectionSlug}/submit`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1378,7 +2013,7 @@ export function AssessmentShell({
         attempt_id: persistedAttemptId,
         assessment_id: assessmentInstanceId || assessmentBank.assessment.id,
         question_id: activeQuestion.id,
-        started_at: localStorage.getItem(`${storageKey}:startedAt`) || new Date().toISOString(),
+        started_at: startedAt,
         submitted_at: new Date().toISOString(),
         duration_minutes: assessmentBank.assessment.duration_minutes,
         submission_mode: "manual",
@@ -1833,12 +2468,13 @@ export function AssessmentShell({
   }
 
   const saveNow = useCallback(() => {
+    const startedAt = resolveAssessmentStartedAt(storageKey, sessionStartedAt) || new Date().toISOString();
     localStorage.setItem(
       storageKey,
       JSON.stringify({
         answers: sanitizeAnswersForStorage(answers),
         activeQuestionId,
-        startedAt: localStorage.getItem(`${storageKey}:startedAt`) || new Date().toISOString(),
+        startedAt,
         activeSection,
         tabEvents,
         cameraEvents,
@@ -1846,7 +2482,7 @@ export function AssessmentShell({
       }),
     );
     setLastSavedAt(new Date());
-  }, [activeQuestionId, activeSection, answers, cameraEvents, storageKey, tabEvents]);
+  }, [activeQuestionId, activeSection, answers, cameraEvents, sessionStartedAt, storageKey, tabEvents]);
 
   useEffect(() => {
     if (!hasHydrated) return;
@@ -1872,6 +2508,7 @@ export function AssessmentShell({
     setIsFinalizing(true);
     const integrityPayload = integrityViolationOverride || integrityViolation;
     const answersForSubmission = sanitizeAnswersForStorage(answers);
+    const startedAt = resolveAssessmentStartedAt(storageKey, sessionStartedAt) || new Date().toISOString();
 
     try {
       const {
@@ -1880,7 +2517,7 @@ export function AssessmentShell({
       const submissionBody = {
         attempt_id: persistedAttemptId,
         assessment_id: assessmentInstanceId || assessmentBank.assessment.id,
-        started_at: localStorage.getItem(`${storageKey}:startedAt`) || new Date().toISOString(),
+        started_at: startedAt,
         submitted_at: new Date().toISOString(),
         duration_minutes: assessmentBank.assessment.duration_minutes,
         tab_events: tabEventsOverride ?? tabEvents,
@@ -1901,14 +2538,15 @@ export function AssessmentShell({
       const payload = (await response.json().catch(() => null)) as { attempt_id?: string; message?: string; statusCode?: number } | null;
 
       if (!response.ok) {
-        if (response.status === 409) {
-          localStorage.removeItem(storageKey);
-          localStorage.removeItem(`${storageKey}:startedAt`);
-          localStorage.removeItem(`${storageKey}:attemptId`);
-          setPersistedAttemptId(null);
-          router.replace("/assessment/report?mode=auto");
-          router.refresh();
-          return;
+      if (response.status === 409) {
+        localStorage.removeItem(storageKey);
+        localStorage.removeItem(`${storageKey}:startedAt`);
+        localStorage.removeItem(`${storageKey}:attemptId`);
+        localStorage.removeItem(`${storageKey}:logoutCount`);
+        setPersistedAttemptId(null);
+        router.replace("/assessment/report?mode=auto");
+        router.refresh();
+        return;
         }
         throw new Error(payload?.message || `Final submission failed with status ${response.status}`);
       }
@@ -1922,6 +2560,7 @@ export function AssessmentShell({
       }
       localStorage.removeItem(storageKey);
       localStorage.removeItem(`${storageKey}:startedAt`);
+      localStorage.removeItem(`${storageKey}:logoutCount`);
       const finalAttemptId = payload?.attempt_id || persistedAttemptId;
       localStorage.removeItem(`${storageKey}:attemptId`);
       setPersistedAttemptId(null);
@@ -1934,6 +2573,7 @@ export function AssessmentShell({
       if (integrityPayload) {
         localStorage.removeItem(storageKey);
         localStorage.removeItem(`${storageKey}:startedAt`);
+        localStorage.removeItem(`${storageKey}:logoutCount`);
         localStorage.removeItem(`${storageKey}:attemptId`);
         setPersistedAttemptId(null);
         router.replace("/assessment/report?mode=auto");
@@ -1962,6 +2602,7 @@ export function AssessmentShell({
     persistedAttemptId,
     router,
     saveNow,
+    sessionStartedAt,
     storageKey,
     tabEvents,
     updateActiveAnswer,
@@ -1971,12 +2612,7 @@ export function AssessmentShell({
     if (!integrityViolation || isExecuting || isFinalizing || autoSubmitStartedRef.current) return;
 
     autoSubmitStartedRef.current = true;
-    void submitAssessment(
-      "auto",
-      integrityViolation.source === "tab_switch" ? integrityViolation.eventCount : undefined,
-      integrityViolation.source === "camera" ? integrityViolation.eventCount : undefined,
-      integrityViolation,
-    );
+    void submitAssessment("auto", undefined, undefined, integrityViolation);
   }, [integrityViolation, isExecuting, isFinalizing, submitAssessment]);
 
   useEffect(() => {
@@ -2079,13 +2715,117 @@ export function AssessmentShell({
     if (localProctoringDisabled) return;
     if (!hasHydrated || navigationType !== "reload") return;
     if (isFinalizing || autoSubmitStartedRef.current || isIntegrityLocked) return;
+    const hasExistingSessionSnapshot =
+      Boolean(initialSnapshot.startedAt) || Boolean(initialSnapshot.persistedAttemptId);
+    if (!hasExistingSessionSnapshot) return;
 
     disqualifyAssessment(
       "tab_switch",
       1,
       "You reloaded the assessment page. Reloading the page disqualifies this attempt.",
     );
-  }, [disqualifyAssessment, hasHydrated, isFinalizing, isIntegrityLocked, navigationType]);
+  }, [
+    disqualifyAssessment,
+    hasHydrated,
+    initialSnapshot.persistedAttemptId,
+    initialSnapshot.startedAt,
+    isFinalizing,
+    isIntegrityLocked,
+    navigationType,
+  ]);
+
+  useEffect(() => {
+    if (localProctoringDisabled || !hasHydrated) return;
+    if (typeof window === "undefined") return;
+
+    const ensureAssessmentHistoryEntry = () => {
+      window.history.pushState({ assessmentBackGuard: true }, "", window.location.href);
+    };
+
+    ensureAssessmentHistoryEntry();
+
+    const handlePopState = () => {
+      if (isFinalizing || autoSubmitStartedRef.current || isIntegrityLocked) return;
+
+      ensureAssessmentHistoryEntry();
+      if (pendingBackWarningRef.current === null) {
+        pendingBackWarningRef.current = 1;
+        window.alert(
+          "Back button warning 1/1: Using the browser back button during the assessment is not allowed. Pressing it again will disqualify this attempt.",
+        );
+        return;
+      }
+
+      const nextCount = pendingBackWarningRef.current + 1;
+      pendingBackWarningRef.current = nextCount;
+      disqualifyAssessment("browser_back", nextCount, buildIntegrityMessage("browser_back", nextCount));
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, [buildIntegrityMessage, disqualifyAssessment, hasHydrated, isFinalizing, isIntegrityLocked]);
+
+  useEffect(() => {
+    if (localProctoringDisabled || !hasHydrated) return;
+    if (!assessmentSecurity.copyPasteBlockEnabled && !assessmentSecurity.inspectModeBlockEnabled) return;
+
+    const handleClipboard = (event: ClipboardEvent) => {
+      if (!assessmentSecurity.copyPasteBlockEnabled || isFinalizing || autoSubmitStartedRef.current || isIntegrityLocked) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+
+    const handleContextMenu = (event: MouseEvent) => {
+      if (!assessmentSecurity.inspectModeBlockEnabled || isFinalizing || autoSubmitStartedRef.current || isIntegrityLocked) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (isFinalizing || autoSubmitStartedRef.current || isIntegrityLocked) return;
+
+      if (assessmentSecurity.copyPasteBlockEnabled && isCopyPasteShortcut(event)) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+
+      if (assessmentSecurity.inspectModeBlockEnabled && isInspectModeShortcut(event)) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    };
+
+    document.addEventListener("copy", handleClipboard);
+    document.addEventListener("cut", handleClipboard);
+    document.addEventListener("paste", handleClipboard);
+    document.addEventListener("contextmenu", handleContextMenu);
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("copy", handleClipboard);
+      document.removeEventListener("cut", handleClipboard);
+      document.removeEventListener("paste", handleClipboard);
+      document.removeEventListener("contextmenu", handleContextMenu);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [
+    assessmentSecurity.copyPasteBlockEnabled,
+    assessmentSecurity.inspectModeBlockEnabled,
+    buildIntegrityMessage,
+    disqualifyAssessment,
+    hasHydrated,
+    isFinalizing,
+    isIntegrityLocked,
+  ]);
+
+  useEffect(() => {
+    if (localProctoringDisabled || !hasHydrated || isFinalizing || autoSubmitStartedRef.current || isIntegrityLocked) return;
+    if (logoutCount < 2) return;
+
+    const message = buildIntegrityMessage("logout", logoutCount);
+    disqualifyAssessment("logout", logoutCount, message);
+  }, [buildIntegrityMessage, disqualifyAssessment, hasHydrated, isFinalizing, isIntegrityLocked, logoutCount]);
 
   if (cameraSecurity.enabled && !cameraStream) {
     return (
@@ -2196,17 +2936,6 @@ export function AssessmentShell({
             <div className="hidden sm:block">
               <TimerBadge seconds={remainingSeconds} hydrated={hasHydrated} label="Total" />
             </div>
-            <form action="/api/auth/signout" method="post">
-              <button
-                type="submit"
-                className="inline-flex h-10 items-center gap-2 rounded-[8px] border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
-                aria-label="Logout"
-                title="Logout"
-              >
-                <LogOut size={16} />
-                <span className="hidden sm:inline">Logout</span>
-              </button>
-            </form>
             <button
               type="button"
               onClick={saveNow}
@@ -2502,39 +3231,9 @@ export function AssessmentShell({
                             <div className="mt-1 text-sm text-white">
                               {typeof item.value === "number" ? `${Math.max(0, Math.min(100, Math.round(item.value)))}%` : "Not available"}
                             </div>
+                            {renderSqlKpiDetails(item.label, activeSqlCalculationTrace)}
                           </div>
                         ))}
-                      </div>
-
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        <div className="rounded-[8px] border border-sky-700/30 bg-slate-950/40 p-3">
-                          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-200">Expected concept tags</div>
-                          <div className="mt-2 flex flex-wrap gap-2">
-                            {textList(activeSqlEvaluationOutput.expected_sql_concept_tags).length ? (
-                              textList(activeSqlEvaluationOutput.expected_sql_concept_tags).map((item) => (
-                                <span key={item} className="rounded-full border border-sky-700/40 bg-sky-900/40 px-2 py-0.5 text-xs text-sky-50">
-                                  {item}
-                                </span>
-                              ))
-                            ) : (
-                              <span className="text-sm text-sky-100/80">Not available</span>
-                            )}
-                          </div>
-                        </div>
-                        <div className="rounded-[8px] border border-sky-700/30 bg-slate-950/40 p-3">
-                          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-200">AI returned concept tags</div>
-                          <div className="mt-2 flex flex-wrap gap-2">
-                            {textList(activeSqlEvaluationOutput.ai_returned_concept_tags).length ? (
-                              textList(activeSqlEvaluationOutput.ai_returned_concept_tags).map((item) => (
-                                <span key={item} className="rounded-full border border-emerald-700/40 bg-emerald-900/30 px-2 py-0.5 text-xs text-emerald-50">
-                                  {item}
-                                </span>
-                              ))
-                            ) : (
-                              <span className="text-sm text-sky-100/80">Not available</span>
-                            )}
-                          </div>
-                        </div>
                       </div>
 
                       <div className="grid gap-3 sm:grid-cols-2">
@@ -2697,6 +3396,17 @@ export function AssessmentShell({
                         <div className="rounded-[8px] border border-sky-700/30 bg-slate-950/40 p-3">
                           <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-200">Hidden tests passed</div>
                           <div className="mt-1 text-sm text-white">{activeDsaCalculationOutput.hiddenTestsPassed}</div>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="rounded-[8px] border border-sky-700/30 bg-slate-950/40 p-3">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-200">Brute-force signal</div>
+                          <div className="mt-1 text-sm text-white">{activeDsaCalculationOutput.bruteForceSignal}</div>
+                        </div>
+                        <div className="rounded-[8px] border border-sky-700/30 bg-slate-950/40 p-3">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-200">Hardcoding signal</div>
+                          <div className="mt-1 text-sm text-white">{activeDsaCalculationOutput.hardcodingSignal}</div>
                         </div>
                       </div>
 

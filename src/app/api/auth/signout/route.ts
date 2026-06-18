@@ -9,18 +9,20 @@ export async function POST(request: NextRequest) {
   <meta charset="utf-8" />
   <title>Signing out...</title>
   <script>
-    // Clear all JoraIQ assessment data from localStorage before redirecting
+    // Preserve active assessment state so a login can resume the timer.
     (function() {
-      var keysToRemove = [];
+      var keysToTouch = [];
       for (var i = 0; i < localStorage.length; i++) {
         var key = localStorage.key(i);
-        if (key && (key.startsWith("joraiq-assessment:") || key.startsWith("assessment-finalize:"))) {
-          keysToRemove.push(key);
+        if (key && key.startsWith("joraiq-assessment:") && !key.endsWith(":logoutCount")) {
+          keysToTouch.push(key);
         }
       }
-      keysToRemove.forEach(function(k) { localStorage.removeItem(k); });
-      // Also clear startedAt companion keys
-      keysToRemove.forEach(function(k) { localStorage.removeItem(k + ":startedAt"); });
+      keysToTouch.forEach(function(k) {
+        var logoutCountKey = k + ":logoutCount";
+        var currentCount = Number(localStorage.getItem(logoutCountKey) || "0");
+        localStorage.setItem(logoutCountKey, String(currentCount + 1));
+      });
     })();
     window.location.href = "/login";
   </script>

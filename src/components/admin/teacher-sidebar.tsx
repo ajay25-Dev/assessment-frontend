@@ -1,6 +1,6 @@
 "use client";
 
-import { FileText, LogOut, Pin, PinOff, UsersRound } from "lucide-react";
+import { FileQuestion, FileText, LogOut, Pin, PinOff, Settings2, UsersRound } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
@@ -17,6 +17,8 @@ const UNPINNED_WIDTH = "112px";
 const items = [
   { href: "/admin/students", label: "Students", icon: UsersRound },
   { href: "/admin/reports", label: "Report", icon: FileText },
+  { href: "/admin/settings", label: "Settings", icon: Settings2 },
+  { href: "/admin/question-bank", label: "Question Bank", icon: FileQuestion },
 ];
 
 function AppLogo({ compact = false }: { compact?: boolean }) {

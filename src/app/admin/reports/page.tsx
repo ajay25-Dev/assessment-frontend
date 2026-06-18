@@ -6,7 +6,9 @@ import {
   Filter,
   GraduationCap,
   Building2,
+  ShieldAlert,
 } from "lucide-react";
+import { revalidatePath } from "next/cache";
 import Link from "next/link";
 import { adminUi } from "@/lib/admin/ui";
 import { requireAdmin } from "@/lib/admin/supabase-admin";
@@ -48,6 +50,20 @@ type ProfileRow = {
   full_name: string | null;
   roll_number: string | null;
 };
+
+type AttemptRow = {
+  id: string;
+  student_id: string | null;
+  assessment_id: string | null;
+  duration_minutes: number | null;
+  started_at: string | null;
+  client_metadata: Record<string, unknown> | null;
+} | null;
+
+type ReportJsonRow = {
+  id: string;
+  report_json: Record<string, unknown> | null;
+} | null;
 
 type BatchStudentRow = {
   batch_id: string | null;
@@ -140,6 +156,147 @@ function riskBadgeClasses(value: string | null | undefined) {
   if (risk === "High") return "border-red-200 bg-red-50 text-red-800";
   if (risk === "Medium") return "border-amber-200 bg-amber-50 text-amber-800";
   return "border-emerald-200 bg-emerald-50 text-emerald-800";
+}
+
+function isDisqualifiedReport(reportJson: unknown) {
+  const record =
+    reportJson && typeof reportJson === "object" && !Array.isArray(reportJson)
+      ? (reportJson as Record<string, unknown>)
+      : {};
+  const integrity =
+    record.integrity && typeof record.integrity === "object" && !Array.isArray(record.integrity)
+      ? (record.integrity as Record<string, unknown>)
+      : {};
+
+  return String(integrity.status || "").toLowerCase() === "disqualified";
+}
+
+function getDisqualificationMessage(reportJson: unknown) {
+  const record =
+    reportJson && typeof reportJson === "object" && !Array.isArray(reportJson)
+      ? (reportJson as Record<string, unknown>)
+      : {};
+  const integrity =
+    record.integrity && typeof record.integrity === "object" && !Array.isArray(record.integrity)
+      ? (record.integrity as Record<string, unknown>)
+      : {};
+
+  return String(integrity.message || "").trim() || "Integrity violation detected.";
+}
+
+function toMetadataRecord(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return value as Record<string, unknown>;
+}
+
+async function requalifyAttemptPreservingWork(formData: FormData) {
+  "use server";
+
+  const attemptId = String(formData.get("attempt_id") || "").trim();
+  if (!attemptId) return;
+
+  const { supabase } = await requireAdmin();
+
+  const { data: attempt, error: attemptError } = await supabase
+    .from("student_assessment_attempts")
+    .select("id,student_id,assessment_id,duration_minutes,started_at,client_metadata")
+    .eq("id", attemptId)
+    .maybeSingle();
+
+  if (attemptError) {
+    throw new Error(`Could not load attempt ${attemptId}: ${attemptError.message}`);
+  }
+  const attemptRow = attempt as AttemptRow;
+  if (!attemptRow?.id) return;
+  if (!attemptRow.student_id) {
+    throw new Error(`Attempt ${attemptId} is missing a student id`);
+  }
+
+  const currentMetadata = toMetadataRecord(attemptRow.client_metadata);
+  const originalSourceAssessmentId = String(
+    currentMetadata.source_assessment_id || attemptRow.assessment_id || "",
+  ).trim();
+  if (!originalSourceAssessmentId) {
+    throw new Error(`Could not determine source assessment id for attempt ${attemptId}`);
+  }
+
+  const now = new Date().toISOString();
+  const resumedStartedAt =
+    String(currentMetadata.session_started_at || attemptRow.started_at || now).trim() || now;
+  const resumedOriginalStartedAt =
+    String(currentMetadata.original_started_at || attemptRow.started_at || now).trim() || now;
+  const updatedMetadata = {
+    ...currentMetadata,
+    source_assessment_id: originalSourceAssessmentId,
+    student_email: String(currentMetadata.student_email || "").trim() || null,
+    submission_mode: String(currentMetadata.submission_mode || "manual"),
+    camera_events: 0,
+    integrity_status: null,
+    integrity_source: null,
+    integrity_message: null,
+    integrity_event_count: null,
+    session_started_at: resumedStartedAt,
+    original_started_at: resumedOriginalStartedAt,
+    session_reset_count: 0,
+    requalified_at: now,
+    requalified_by: "admin",
+  };
+
+  const { error: updateAttemptError } = await supabase
+    .from("student_assessment_attempts")
+    .update({
+      status: "in_progress",
+      submitted_at: null,
+      tab_visibility_events: 0,
+      last_seen_at: now,
+      client_metadata: updatedMetadata,
+    })
+    .eq("id", attemptId);
+
+  if (updateAttemptError) {
+    throw new Error(`Could not requalify attempt ${attemptId}: ${updateAttemptError.message}`);
+  }
+
+  const { data: report, error: reportError } = await supabase
+    .from("student_assessment_reports")
+    .select("id,report_json")
+    .eq("attempt_id", attemptId)
+    .maybeSingle();
+
+  if (reportError) {
+    throw new Error(`Could not load report ${attemptId}: ${reportError.message}`);
+  }
+
+  const reportRow = report as ReportJsonRow;
+  if (reportRow?.id) {
+    const reportJson =
+      reportRow.report_json && typeof reportRow.report_json === "object" && !Array.isArray(reportRow.report_json)
+        ? (reportRow.report_json as Record<string, unknown>)
+        : {};
+
+    const { error: updateReportError } = await supabase
+      .from("student_assessment_reports")
+      .update({
+        report_json: {
+          ...reportJson,
+          integrity: null,
+          requalified_at: now,
+          requalified_by: "admin",
+        },
+      })
+      .eq("id", reportRow.id);
+
+    if (updateReportError) {
+      throw new Error(`Could not update report ${attemptId}: ${updateReportError.message}`);
+    }
+  }
+
+  revalidatePath("/admin/reports");
+  revalidatePath("/admin/reports/students");
+  revalidatePath("/assessment/start");
+  revalidatePath("/assessment/test");
+  revalidatePath("/assessment/report");
+  revalidatePath("/dashboard");
 }
 
 function combinedRisk(report: { brute_force_risk: string | null; hardcoding_risk: string | null }): RiskFilter {
@@ -338,6 +495,7 @@ export default async function AdminReportsPage({
     fromFilter,
     toFilter,
   ].filter(Boolean).length;
+  const disqualifiedReports = filteredReports.filter((report) => isDisqualifiedReport(report.report_json));
 
   const statCards = [
     {
@@ -426,6 +584,57 @@ export default async function AdminReportsPage({
             </article>
           );
         })}
+      </section>
+
+      <section className={adminUi.sectionCard}>
+        <div className="flex flex-col gap-3 border-b border-slate-100 pb-4 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <h3 className={adminUi.sectionTitle}>Disqualified candidates</h3>
+            <p className={`mt-1 ${adminUi.subtleText}`}>
+              Reopen a disqualified attempt without losing the questions, code, or answers the student already saved.
+            </p>
+          </div>
+          <span className="inline-flex w-fit items-center gap-2 rounded-full border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-800">
+            <ShieldAlert size={14} />
+            {disqualifiedReports.length} disqualified
+          </span>
+        </div>
+
+        {disqualifiedReports.length ? (
+          <div className="mt-4 grid gap-3 lg:grid-cols-2">
+            {disqualifiedReports.slice(0, 8).map((report) => {
+              const disqualificationMessage = getDisqualificationMessage(report.report_json);
+
+              return (
+                <article key={report.id} className="rounded-[18px] border border-red-200 bg-red-50/60 p-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-red-700">Disqualified</p>
+                      <h4 className="mt-2 text-lg font-semibold text-slate-950">{report.student_name}</h4>
+                      <p className="mt-1 text-sm text-slate-700">{report.assessment_title || "Untitled assessment"}</p>
+                      <p className="mt-2 text-sm leading-6 text-slate-600">{disqualificationMessage}</p>
+                      <p className="mt-2 text-xs text-slate-500">{formatDate(report.created_at)}</p>
+                    </div>
+                    <form action={requalifyAttemptPreservingWork}>
+                      <input type="hidden" name="attempt_id" value={report.attempt_id || ""} />
+                      <button
+                        type="submit"
+                        className="inline-flex items-center justify-center rounded-[12px] border border-emerald-200 bg-white px-3 py-2 text-sm font-semibold text-emerald-800 shadow-sm transition hover:bg-emerald-50"
+                        disabled={!report.attempt_id}
+                      >
+                        Requalify and preserve work
+                      </button>
+                    </form>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="mt-4 rounded-[18px] border border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
+            No disqualified candidates match the current filters.
+          </div>
+        )}
       </section>
 
       <section className={adminUi.sectionCard}>
@@ -529,6 +738,7 @@ export default async function AdminReportsPage({
                 {filteredReports.slice(0, 50).map((report, index) => {
                   const bucket = normalizeBucket(report.readiness_bucket, report.readiness_label);
                   const risk = combinedRisk(report);
+                  const isDisqualified = isDisqualifiedReport(report.report_json);
                   const profileHref = report.student_id ? `/admin/reports/students/${report.student_id}` : "/admin/reports/students";
                   const reportHref = buildStudentReportHref(report);
 
@@ -577,6 +787,12 @@ export default async function AdminReportsPage({
                         <div className="grid gap-2">
                           <div className="flex flex-wrap gap-2">
                             <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${readinessClasses(bucket)}`}>{bucket}</span>
+                            {isDisqualified ? (
+                              <span className="inline-flex items-center gap-1 rounded-full border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-800">
+                                <ShieldAlert size={13} />
+                                Disqualified
+                              </span>
+                            ) : null}
                             <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-semibold ${riskBadgeClasses(report.brute_force_risk)}`}>
                               <AlertTriangle size={13} />
                               BF {normalizeRisk(report.brute_force_risk)}
@@ -622,6 +838,7 @@ export default async function AdminReportsPage({
           {filteredReports.slice(0, 50).map((report, index) => {
             const bucket = normalizeBucket(report.readiness_bucket, report.readiness_label);
             const risk = combinedRisk(report);
+            const isDisqualified = isDisqualifiedReport(report.report_json);
             const profileHref = report.student_id ? `/admin/reports/students/${report.student_id}` : "/admin/reports/students";
             const reportHref = buildStudentReportHref(report);
 
@@ -670,6 +887,12 @@ export default async function AdminReportsPage({
                   <div className="grid gap-2 rounded-[14px] border border-slate-200 bg-white px-3 py-3">
                     <div className="flex flex-wrap gap-2">
                       <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${readinessClasses(bucket)}`}>{bucket}</span>
+                      {isDisqualified ? (
+                        <span className="inline-flex items-center gap-1 rounded-full border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-800">
+                          <ShieldAlert size={13} />
+                          Disqualified
+                        </span>
+                      ) : null}
                       <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-semibold ${riskBadgeClasses(report.brute_force_risk)}`}>
                         <AlertTriangle size={13} />
                         BF {normalizeRisk(report.brute_force_risk)}

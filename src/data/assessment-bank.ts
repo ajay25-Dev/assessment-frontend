@@ -7,6 +7,18 @@ export type AssessmentLanguage = {
   judge0_language_id: number;
 };
 
+export type AssessmentSecurityPolicy = {
+  tab_switch_protection_enabled?: boolean;
+  max_tab_switch_events?: number;
+  auto_submit_on_max_events?: boolean;
+  camera_proctoring_enabled?: boolean;
+  max_camera_events?: number;
+  auto_submit_on_camera_events?: boolean;
+  copy_paste_block_enabled?: boolean;
+  inspect_mode_block_enabled?: boolean;
+  restart_timer_on_login?: boolean;
+};
+
 const compilerVersionLabels: Record<string, string> = {
   python: "Python 3.12",
   javascript: "JavaScript Node 22",
@@ -99,14 +111,7 @@ export type AssessmentBank = {
     description: string;
     duration_minutes: number;
     scoring_weights: Record<AssessmentSectionId, number>;
-    security?: {
-      tab_switch_protection_enabled?: boolean;
-      max_tab_switch_events?: number;
-      auto_submit_on_max_events?: boolean;
-      camera_proctoring_enabled?: boolean;
-      max_camera_events?: number;
-      auto_submit_on_camera_events?: boolean;
-    };
+    security?: AssessmentSecurityPolicy;
     sections: Array<{
       id: string;
       name: AssessmentSectionId;

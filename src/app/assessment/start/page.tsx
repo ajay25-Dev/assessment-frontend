@@ -104,12 +104,12 @@ export default async function AssessmentStartPage({ searchParams }: PageProps) {
   const finalStatuses = new Set(["submitted", "auto_submitted", "disqualified"]);
   const isFinalAttempt = (row: AssessmentAttemptRow) =>
     finalStatuses.has(row.status || "") || row.client_metadata?.integrity_status === "disqualified";
-  const terminalAttempt =
+  const latestMatchingAttempt =
     assessmentAttemptRows.find((row) => {
-      if (!isFinalAttempt(row)) return false;
       return assessmentId ? row.client_metadata?.source_assessment_id === assessmentId : true;
     }) || null;
 
+  const terminalAttempt = latestMatchingAttempt && isFinalAttempt(latestMatchingAttempt) ? latestMatchingAttempt : null;
   const existingAttemptId = terminalAttempt?.id || null;
   if (existingAttemptId) {
     redirect(`/assessment/report?attemptId=${encodeURIComponent(existingAttemptId)}`);
@@ -155,6 +155,29 @@ export default async function AssessmentStartPage({ searchParams }: PageProps) {
                   ? "This assessment cannot be retaken. Use the completed report screen to review the attempt."
                   : "Review the structure once, then continue into the 3-hour workspace for DSA, SQL, OOPs, and Core CS MCQs."}
               </p>
+
+              <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                {sections.map((section) => {
+                  const Icon = section.icon;
+                  return (
+                    <article
+                      key={section.title}
+                      className="rounded-[8px] border border-white/18 bg-white/10 p-4 shadow-sm backdrop-blur-sm"
+                    >
+                      <div className="flex h-10 w-10 items-center justify-center rounded-[8px] bg-white/12 text-white">
+                        <Icon size={18} />
+                      </div>
+                      <h3 className="mt-4 text-base font-semibold text-white">{section.title}</h3>
+                      <dl className="mt-4 space-y-3 text-sm text-emerald-50">
+                        <div>
+                          <dt className="font-medium text-emerald-100/85">Duration</dt>
+                          <dd className="mt-1 text-white">{section.duration}</dd>
+                        </div>
+                      </dl>
+                    </article>
+                  );
+                })}
+              </div>
             </div>
             <div className="p-6 sm:p-8">
               <div className="rounded-[8px] border border-amber-200 bg-amber-50 p-4">
@@ -185,27 +208,7 @@ export default async function AssessmentStartPage({ searchParams }: PageProps) {
           </div>
         </section>
 
-        <section className="mt-6 grid gap-4 lg:grid-cols-4">
-          {sections.map((section) => {
-            const Icon = section.icon;
-            return (
-              <article key={section.title} className="rounded-[8px] border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="flex h-10 w-10 items-center justify-center rounded-[8px] bg-emerald-50 text-emerald-800">
-                  <Icon size={19} />
-                </div>
-                <h3 className="mt-4 font-semibold text-slate-950">{section.title}</h3>
-                <dl className="mt-4 space-y-3 text-sm">
-                  <div>
-                    <dt className="font-medium text-slate-500">Duration</dt>
-                    <dd className="mt-1 text-slate-900">{section.duration}</dd>
-                  </div>
-                </dl>
-              </article>
-            );
-          })}
-        </section>
-
-        <section className="mt-6 grid gap-4 lg:grid-cols-[1.05fr_0.95fr]">
+        {/* <section className="mt-6 grid gap-4 lg:grid-cols-[1.05fr_0.95fr]">
           <article className="rounded-[8px] border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex items-center gap-2 text-slate-950">
               <Gauge size={18} />
@@ -254,9 +257,9 @@ export default async function AssessmentStartPage({ searchParams }: PageProps) {
               compared to the previous 30 days, then calculate drop percentage.
             </div>
           </article>
-        </section>
+        </section> */}
 
-        <section className="mt-6 grid gap-4 lg:grid-cols-[0.95fr_1.05fr]">
+        {/* <section className="mt-6 grid gap-4 lg:grid-cols-[0.95fr_1.05fr]">
           <article className="rounded-[8px] border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex items-center gap-2 text-slate-950">
               <Server size={18} />
@@ -286,7 +289,7 @@ export default async function AssessmentStartPage({ searchParams }: PageProps) {
               <div className="rounded-[8px] bg-slate-50 p-4">The first tab or camera violation warns you; the next one disqualifies the attempt.</div>
             </div>
           </article>
-        </section>
+        </section> */}
       </div>
     </main>
   );
