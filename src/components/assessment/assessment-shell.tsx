@@ -1862,7 +1862,7 @@ export function AssessmentShell({
     }
 
     if (source === "inspect_mode") {
-      return "Developer tools and inspect shortcuts are disabled for this assessment. This attempt has been disqualified.";
+      return "Developer tools and inspect shortcuts are disabled for this assessment.";
     }
 
     if (source === "logout") {
@@ -2778,7 +2778,7 @@ export function AssessmentShell({
     const handleContextMenu = (event: MouseEvent) => {
       if (!assessmentSecurity.inspectModeBlockEnabled || isFinalizing || autoSubmitStartedRef.current || isIntegrityLocked) return;
       event.preventDefault();
-      disqualifyAssessment("inspect_mode", 1, buildIntegrityMessage("inspect_mode", 1));
+      event.stopPropagation();
     };
 
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -2792,7 +2792,7 @@ export function AssessmentShell({
 
       if (assessmentSecurity.inspectModeBlockEnabled && isInspectModeShortcut(event)) {
         event.preventDefault();
-        disqualifyAssessment("inspect_mode", 1, buildIntegrityMessage("inspect_mode", 1));
+        event.stopPropagation();
       }
     };
 
