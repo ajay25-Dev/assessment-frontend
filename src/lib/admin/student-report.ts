@@ -271,16 +271,10 @@ export function mapTechnicalLabelToTeacherLabel(key: string) {
     sql_result_row_count: "SQL Result Row Count",
     sql_result_error: "SQL Result Error",
     runtime_observation: "Runtime Observation",
-    class_design_score: "Class Design Score",
     abstraction_score: "Abstraction Score",
     encapsulation_score: "Encapsulation Score",
     polymorphism_score: "Polymorphism Score",
-    extensibility_score: "Extensibility Score",
-    separation_of_concerns_score: "Separation of Concerns Score",
     solid_principles_score: "SOLID Principles Score",
-    error_handling_score: "Error Handling Score",
-    code_readability_score: "Code Readability Score",
-    design_pattern_awareness_score: "Design Pattern Awareness Score",
     design_maturity_label: "Design Maturity Label",
     identified_classes: "Identified Classes",
     identified_interfaces_or_abstractions: "Identified Interfaces / Abstractions",
@@ -468,8 +462,10 @@ export function extractLatestSkillScores(report: ReportRow, reportJson: unknown)
         numberValue(output.overall_question_score) ||
         numberValue(output.overall_mcq_score) ||
         numberValue(output.query_efficiency_score) ||
-        numberValue(output.code_readability_score) ||
-        numberValue(output.class_design_score) ||
+        numberValue(output.solid_principles_score) ||
+        numberValue(output.polymorphism_score) ||
+        numberValue(output.encapsulation_score) ||
+        numberValue(output.abstraction_score) ||
         numberValue(output.approach_score) ||
         numberValue(output.code_quality_score);
 
@@ -489,7 +485,7 @@ export function extractLatestSkillScores(report: ReportRow, reportJson: unknown)
     { label: "Readiness Score", value: clampScore(dashboardOutput?.readiness_score), helper: "Placement readiness summary based on marks, capability, solution quality, and risk signals." },
     { label: "DSA", value: clampScore(report.dsa_score ?? dashboardOutput?.dsa_score), helper: "Algorithmic problem-solving and complexity control." },
     { label: "SQL", value: clampScore(report.sql_score ?? dashboardOutput?.sql_score), helper: "Query accuracy, logic, and output quality." },
-    { label: "OOPs", value: clampScore(report.oops_score ?? dashboardOutput?.oops_score), helper: "Object design, abstraction, and maintainability." },
+    { label: "OOPs", value: clampScore(report.oops_score ?? dashboardOutput?.oops_score), helper: "Abstraction, encapsulation, polymorphism, and SOLID principles." },
     { label: "MCQ", value: clampScore(report.mcq_score ?? dashboardOutput?.mcq_score), helper: "Concept recall and subject knowledge." },
     { label: "Approach Score", value: clampScore(report.approach_score ?? dashboardOutput?.approach_score), helper: "How well the solution strategy fits the problem." },
     { label: "Complexity Score", value: clampScore(report.complexity_score ?? dashboardOutput?.complexity_score), helper: "Time and space efficiency." },
@@ -584,7 +580,7 @@ export function extractSkillScores(report: Pick<ReportRow, "marks_score" | "capa
     { label: "Practice Priority", value: clampScore(report.training_priority ? 75 : 0), helper: report.training_priority || "No explicit priority given." },
     { label: "DSA Performance", value: clampScore(report.dsa_score), helper: "Algorithmic problem-solving and complexity control." },
     { label: "SQL Performance", value: clampScore(report.sql_score), helper: "Query accuracy, logic, and output quality." },
-    { label: "OOPs Performance", value: clampScore(report.oops_score), helper: "Object design, abstraction, and maintainability." },
+    { label: "OOPs Performance", value: clampScore(report.oops_score), helper: "Abstraction, encapsulation, polymorphism, and SOLID principles." },
     { label: "MCQ Performance", value: clampScore(report.mcq_score), helper: "Concept recall and subject knowledge." },
     { label: "Approach Score", value: clampScore(report.approach_score), helper: "How well the solution strategy fits the problem." },
     { label: "Complexity Score", value: clampScore(report.complexity_score), helper: "Time and space efficiency." },

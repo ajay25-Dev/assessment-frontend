@@ -134,16 +134,10 @@ type DsaCalculationOutput = {
 
 type OopsCalculationOutput = {
   score: string;
-  classDesignScore: number | "Not available";
   abstractionScore: number | "Not available";
   encapsulationScore: number | "Not available";
   polymorphismScore: number | "Not available";
-  extensibilityScore: number | "Not available";
-  separationOfConcernsScore: number | "Not available";
   solidPrinciplesScore: number | "Not available";
-  errorHandlingScore: number | "Not available";
-  codeReadabilityScore: number | "Not available";
-  designPatternAwarenessScore: number | "Not available";
   overallQuestionScore: number | "Not available";
   designMaturityLabel: string;
   placementReadinessLabel: string;
@@ -1210,10 +1204,6 @@ function buildOopsCalculationOutput(
 
   return {
     score: scoreToText(overallQuestionScore),
-    classDesignScore:
-      typeof backendOutput.class_design_score === "number"
-        ? backendOutput.class_design_score
-        : "Not available",
     abstractionScore:
       typeof backendOutput.abstraction_score === "number"
         ? backendOutput.abstraction_score
@@ -1226,29 +1216,9 @@ function buildOopsCalculationOutput(
       typeof backendOutput.polymorphism_score === "number"
         ? backendOutput.polymorphism_score
         : "Not available",
-    extensibilityScore:
-      typeof backendOutput.extensibility_score === "number"
-        ? backendOutput.extensibility_score
-        : "Not available",
-    separationOfConcernsScore:
-      typeof backendOutput.separation_of_concerns_score === "number"
-        ? backendOutput.separation_of_concerns_score
-        : "Not available",
     solidPrinciplesScore:
       typeof backendOutput.solid_principles_score === "number"
         ? backendOutput.solid_principles_score
-        : "Not available",
-    errorHandlingScore:
-      typeof backendOutput.error_handling_score === "number"
-        ? backendOutput.error_handling_score
-        : "Not available",
-    codeReadabilityScore:
-      typeof backendOutput.code_readability_score === "number"
-        ? backendOutput.code_readability_score
-        : "Not available",
-    designPatternAwarenessScore:
-      typeof backendOutput.design_pattern_awareness_score === "number"
-        ? backendOutput.design_pattern_awareness_score
         : "Not available",
     overallQuestionScore,
     designMaturityLabel: String(
@@ -3457,14 +3427,10 @@ export function AssessmentShell({
                     <div className="grid gap-3">
                       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                         {[
-                          { label: "Class design", value: activeOopsCalculationOutput.classDesignScore },
                           { label: "Abstraction", value: activeOopsCalculationOutput.abstractionScore },
                           { label: "Encapsulation", value: activeOopsCalculationOutput.encapsulationScore },
                           { label: "Polymorphism", value: activeOopsCalculationOutput.polymorphismScore },
                           { label: "SOLID principles", value: activeOopsCalculationOutput.solidPrinciplesScore },
-                          { label: "Error handling", value: activeOopsCalculationOutput.errorHandlingScore },
-                          { label: "Code readability", value: activeOopsCalculationOutput.codeReadabilityScore },
-                          { label: "Design pattern awareness", value: activeOopsCalculationOutput.designPatternAwarenessScore },
                           { label: "Overall question score", value: activeOopsCalculationOutput.overallQuestionScore },
                         ].map((item) => (
                           <div key={item.label} className="rounded-[8px] border border-violet-700/30 bg-slate-950/40 p-3">
