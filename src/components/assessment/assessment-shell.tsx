@@ -54,6 +54,7 @@ type AnswerState = {
 
 type ActiveTab = "problem" | "answer" | "results";
 type CameraPosition = { x: number; y: number };
+type SectionElapsedSecondsMap = Partial<Record<AssessmentSectionId, number>>;
 
 type CompilerResponse = {
   status?: { id?: number; description?: string };
@@ -1319,30 +1320,40 @@ function sectionDurations(assessmentBank: AssessmentBank) {
   ) as Record<AssessmentSectionId, number>;
 }
 
-function sectionTimingForElapsed(assessmentBank: AssessmentBank, elapsedSeconds: number) {
-  const durations = sectionDurations(assessmentBank);
-  let elapsedBeforeSection = 0;
+function totalDurationSeconds(assessmentBank: AssessmentBank) {
+  return Object.values(sectionDurations(assessmentBank)).reduce((sum, value) => sum + value * 60, 0);
+}
 
-  for (const section of sectionOrder) {
-    const durationSeconds = durations[section] * 60;
-    const sectionEnd = elapsedBeforeSection + durationSeconds;
-    if (elapsedSeconds < sectionEnd) {
-      return {
-        activeSection: section,
-        sectionRemainingSeconds: Math.max(0, sectionEnd - elapsedSeconds),
-        totalRemainingSeconds: Math.max(
-          0,
-          sectionOrder.reduce((sum, item) => sum + durations[item] * 60, 0) - elapsedSeconds,
-        ),
-      };
-    }
-    elapsedBeforeSection = sectionEnd;
-  }
+function totalRemainingForStartedAt(assessmentBank: AssessmentBank, startedAt: string | null) {
+  if (!startedAt) return totalDurationSeconds(assessmentBank);
+  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000));
+  return Math.max(0, totalDurationSeconds(assessmentBank) - elapsedSeconds);
+}
 
+function sectionRemainingForElapsed(assessmentBank: AssessmentBank, section: AssessmentSectionId, elapsedSeconds: number) {
+  const durationSeconds = sectionDurations(assessmentBank)[section] * 60;
+  return Math.max(0, durationSeconds - elapsedSeconds);
+}
+
+function activeSectionElapsedSeconds(
+  elapsedBySection: SectionElapsedSecondsMap,
+  section: AssessmentSectionId,
+  activeStartedAt: string | null,
+) {
+  const savedElapsed = Math.max(0, Math.floor(Number(elapsedBySection[section] || 0)));
+  if (!activeStartedAt) return savedElapsed;
+  const activeElapsed = Math.max(0, Math.floor((Date.now() - new Date(activeStartedAt).getTime()) / 1000));
+  return savedElapsed + activeElapsed;
+}
+
+function flushActiveSectionElapsed(
+  elapsedBySection: SectionElapsedSecondsMap,
+  section: AssessmentSectionId,
+  activeStartedAt: string | null,
+) {
   return {
-    activeSection: sectionOrder[sectionOrder.length - 1],
-    sectionRemainingSeconds: 0,
-    totalRemainingSeconds: 0,
+    ...elapsedBySection,
+    [section]: activeSectionElapsedSeconds(elapsedBySection, section, activeStartedAt),
   };
 }
 
@@ -1379,13 +1390,15 @@ function clampCameraPosition(position: CameraPosition): CameraPosition {
 
 function loadInitialSnapshot(assessmentBank: AssessmentBank) {
   const questions = assessmentBank.questions;
-  const initialTiming = sectionTimingForElapsed(assessmentBank, 0);
+  const initialSection = sectionOrder[0];
   return {
-    activeQuestionId: firstQuestionInSection(questions, initialTiming.activeSection),
+    activeQuestionId: firstQuestionInSection(questions, initialSection),
     answers: createInitialAnswers(questions),
-    activeSection: initialTiming.activeSection,
-    sectionRemainingSeconds: initialTiming.sectionRemainingSeconds,
-    remainingSeconds: initialTiming.totalRemainingSeconds,
+    activeSection: initialSection,
+    sectionElapsedSecondsBySection: {} as SectionElapsedSecondsMap,
+    activeSectionStartedAt: null as string | null,
+    sectionRemainingSeconds: sectionRemainingForElapsed(assessmentBank, initialSection, 0),
+    remainingSeconds: totalDurationSeconds(assessmentBank),
     startedAt: null as string | null,
     timerPolicy: "resume_on_login" as "restart_on_login" | "resume_on_login",
     tabEvents: 0,
@@ -1393,12 +1406,6 @@ function loadInitialSnapshot(assessmentBank: AssessmentBank) {
     logoutCount: 0,
     persistedAttemptId: null as string | null,
   };
-}
-
-function sectionTimingForRemaining(assessmentBank: AssessmentBank, remainingSeconds: number) {
-  const totalSeconds = Object.values(sectionDurations(assessmentBank)).reduce((sum, value) => sum + value * 60, 0);
-  const elapsedSeconds = Math.max(0, totalSeconds - Math.max(0, remainingSeconds));
-  return sectionTimingForElapsed(assessmentBank, elapsedSeconds);
 }
 
 function resolveAssessmentStartedAt(storageKey: string, sessionStartedAt: string | null) {
@@ -1445,6 +1452,8 @@ function loadSavedSnapshot(assessmentBank: AssessmentBank, assessmentInstanceId?
       answers?: Record<string, AnswerState>;
       activeQuestionId?: string;
       activeSection?: AssessmentSectionId;
+      sectionElapsedSecondsBySection?: SectionElapsedSecondsMap;
+      activeSectionStartedAt?: string | null;
       startedAt?: string;
       timerPolicy?: "restart_on_login" | "resume_on_login";
       tabEvents?: number;
@@ -1452,8 +1461,6 @@ function loadSavedSnapshot(assessmentBank: AssessmentBank, assessmentInstanceId?
       logoutCount?: number;
     };
     const startedAt = parsed.startedAt || window.localStorage.getItem(`${storageKey}:startedAt`);
-    const elapsed = startedAt ? Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000) : 0;
-    const timing = sectionTimingForElapsed(assessmentBank, elapsed);
     const persistedAttemptId = window.localStorage.getItem(attemptIdKey);
     const logoutCount = Number(
       window.localStorage.getItem(logoutCountKey) || parsed.logoutCount || 0,
@@ -1461,13 +1468,18 @@ function loadSavedSnapshot(assessmentBank: AssessmentBank, assessmentInstanceId?
     const savedActiveQuestion = parsed.activeQuestionId
       ? questions.find((question) => question.id === parsed.activeQuestionId)
       : null;
-    const activeSection = savedActiveQuestion?.section || parsed.activeSection || timing.activeSection;
+    const activeSection = savedActiveQuestion?.section || parsed.activeSection || fallback.activeSection;
+    const sectionElapsedSecondsBySection = parsed.sectionElapsedSecondsBySection || {};
+    const activeSectionStartedAt = parsed.activeSectionStartedAt || new Date().toISOString();
+    const activeElapsed = activeSectionElapsedSeconds(sectionElapsedSecondsBySection, activeSection, activeSectionStartedAt);
     return {
       activeQuestionId: savedActiveQuestion?.id || firstQuestionInSection(questions, activeSection),
       answers: sanitizeAnswersForStorage({ ...fallback.answers, ...(parsed.answers || {}) }),
       activeSection,
-      sectionRemainingSeconds: timing.sectionRemainingSeconds,
-      remainingSeconds: timing.totalRemainingSeconds,
+      sectionElapsedSecondsBySection,
+      activeSectionStartedAt,
+      sectionRemainingSeconds: sectionRemainingForElapsed(assessmentBank, activeSection, activeElapsed),
+      remainingSeconds: totalRemainingForStartedAt(assessmentBank, startedAt),
       startedAt,
       timerPolicy: parsed.timerPolicy || "resume_on_login",
       tabEvents: parsed.tabEvents || 0,
@@ -1505,6 +1517,8 @@ export function AssessmentShell({
   const [activeQuestionId, setActiveQuestionId] = useState(initialSnapshot.activeQuestionId);
   const [answers, setAnswers] = useState<Record<string, AnswerState>>(initialSnapshot.answers);
   const [activeSection, setActiveSection] = useState<AssessmentSectionId>(initialSnapshot.activeSection);
+  const [sectionElapsedSecondsBySection, setSectionElapsedSecondsBySection] = useState<SectionElapsedSecondsMap>(initialSnapshot.sectionElapsedSecondsBySection);
+  const [activeSectionStartedAt, setActiveSectionStartedAt] = useState<string | null>(initialSnapshot.activeSectionStartedAt);
   const [sectionRemainingSeconds, setSectionRemainingSeconds] = useState(initialSnapshot.sectionRemainingSeconds);
   const [remainingSeconds, setRemainingSeconds] = useState(initialSnapshot.remainingSeconds);
   const [sessionStartedAt, setSessionStartedAt] = useState<string | null>(initialSnapshot.startedAt);
@@ -1650,6 +1664,8 @@ export function AssessmentShell({
       setActiveQuestionId(savedSnapshot.activeQuestionId);
       setAnswers(savedSnapshot.answers);
       setActiveSection(savedSnapshot.activeSection);
+      setSectionElapsedSecondsBySection(savedSnapshot.sectionElapsedSecondsBySection);
+      setActiveSectionStartedAt(savedSnapshot.activeSectionStartedAt);
       setSectionRemainingSeconds(savedSnapshot.sectionRemainingSeconds);
       setRemainingSeconds(savedSnapshot.remainingSeconds);
       setSessionStartedAt(savedSnapshot.startedAt);
@@ -1688,11 +1704,14 @@ export function AssessmentShell({
         setSessionStartedAt(session.started_at);
         setSessionTimerPolicy(session.timer_policy);
         setLogoutCount(session.session_reset_count);
-        const timing = sectionTimingForRemaining(assessmentBank, session.remaining_seconds);
-        setActiveSection(timing.activeSection);
-        setSectionRemainingSeconds(timing.sectionRemainingSeconds);
+        const activeBootstrapSection = sectionOrder[0];
+        const activeStartedAt = new Date().toISOString();
+        setActiveSection(activeBootstrapSection);
+        setSectionElapsedSecondsBySection({});
+        setActiveSectionStartedAt(activeStartedAt);
+        setSectionRemainingSeconds(sectionRemainingForElapsed(assessmentBank, activeBootstrapSection, 0));
         setRemainingSeconds(session.remaining_seconds);
-        setActiveQuestionId(firstQuestionInSection(questions, timing.activeSection));
+        setActiveQuestionId(firstQuestionInSection(questions, activeBootstrapSection));
 
         localStorage.setItem(`${storageKey}:startedAt`, session.started_at);
         localStorage.setItem(`${storageKey}:attemptId`, session.attempt_id);
@@ -1701,8 +1720,10 @@ export function AssessmentShell({
           storageKey,
           JSON.stringify({
             answers: sanitizeAnswersForStorage(answers),
-            activeQuestionId: firstQuestionInSection(questions, timing.activeSection),
-            activeSection: timing.activeSection,
+            activeQuestionId: firstQuestionInSection(questions, activeBootstrapSection),
+            activeSection: activeBootstrapSection,
+            sectionElapsedSecondsBySection: {},
+            activeSectionStartedAt: activeStartedAt,
             startedAt: session.started_at,
             timerPolicy: session.timer_policy,
             tabEvents: 0,
@@ -1751,15 +1772,15 @@ export function AssessmentShell({
     if (!hasHydrated || !canRunAssessment || !sessionStartedAt) return;
 
     const interval = window.setInterval(() => {
-      const elapsed = Math.floor((Date.now() - new Date(sessionStartedAt).getTime()) / 1000);
-      const timing = sectionTimingForElapsed(assessmentBank, elapsed);
-
-      setSectionRemainingSeconds(timing.sectionRemainingSeconds);
-      setRemainingSeconds(timing.totalRemainingSeconds);
+      const activeElapsed = activeSectionElapsedSeconds(sectionElapsedSecondsBySection, activeSection, activeSectionStartedAt);
+      setSectionRemainingSeconds(
+        sectionRemainingForElapsed(assessmentBank, activeSection, activeElapsed),
+      );
+      setRemainingSeconds(totalRemainingForStartedAt(assessmentBank, sessionStartedAt));
     }, 1000);
 
     return () => window.clearInterval(interval);
-  }, [assessmentBank, canRunAssessment, hasHydrated, sessionStartedAt]);
+  }, [activeSection, activeSectionStartedAt, assessmentBank, canRunAssessment, hasHydrated, sectionElapsedSecondsBySection, sessionStartedAt]);
 
   useEffect(() => {
     if (!hasHydrated || !canRunAssessment || !sessionStartedAt) return;
@@ -1776,6 +1797,8 @@ export function AssessmentShell({
           startedAt: sessionStartedAt,
           timerPolicy: sessionTimerPolicy,
           activeSection,
+          sectionElapsedSecondsBySection: flushActiveSectionElapsed(sectionElapsedSecondsBySection, activeSection, activeSectionStartedAt),
+          activeSectionStartedAt: new Date().toISOString(),
           tabEvents,
           cameraEvents,
           savedAt: new Date().toISOString(),
@@ -1785,7 +1808,7 @@ export function AssessmentShell({
     }, 6000);
 
     return () => window.clearInterval(interval);
-  }, [activeQuestionId, activeSection, answers, cameraEvents, canRunAssessment, hasHydrated, sessionStartedAt, sessionTimerPolicy, storageKey, tabEvents]);
+  }, [activeQuestionId, activeSection, activeSectionStartedAt, answers, cameraEvents, canRunAssessment, hasHydrated, sectionElapsedSecondsBySection, sessionStartedAt, sessionTimerPolicy, storageKey, tabEvents]);
 
   const updateActiveAnswer = useCallback((patch: Partial<AnswerState>) => {
     setAnswers((current) => ({
@@ -1939,7 +1962,15 @@ export function AssessmentShell({
     const targetQuestion = questions.find((question) => question.id === questionId);
     if (!targetQuestion) return;
 
+    const now = new Date().toISOString();
+    const nextSectionElapsed = targetQuestion.section === activeSection
+      ? activeSectionElapsedSeconds(sectionElapsedSecondsBySection, activeSection, activeSectionStartedAt)
+      : Math.max(0, Math.floor(Number(sectionElapsedSecondsBySection[targetQuestion.section] || 0)));
+    const nextElapsedBySection = flushActiveSectionElapsed(sectionElapsedSecondsBySection, activeSection, activeSectionStartedAt);
     setActiveSection(targetQuestion.section);
+    setSectionElapsedSecondsBySection(nextElapsedBySection);
+    setActiveSectionStartedAt(now);
+    setSectionRemainingSeconds(sectionRemainingForElapsed(assessmentBank, targetQuestion.section, nextSectionElapsed));
     setActiveQuestionId(questionId);
     setActiveTab("answer");
     setNavOpen(false);
@@ -2446,13 +2477,15 @@ export function AssessmentShell({
         activeQuestionId,
         startedAt,
         activeSection,
+        sectionElapsedSecondsBySection: flushActiveSectionElapsed(sectionElapsedSecondsBySection, activeSection, activeSectionStartedAt),
+        activeSectionStartedAt: new Date().toISOString(),
         tabEvents,
         cameraEvents,
         savedAt: new Date().toISOString(),
       }),
     );
     setLastSavedAt(new Date());
-  }, [activeQuestionId, activeSection, answers, cameraEvents, sessionStartedAt, storageKey, tabEvents]);
+  }, [activeQuestionId, activeSection, activeSectionStartedAt, answers, cameraEvents, sectionElapsedSecondsBySection, sessionStartedAt, storageKey, tabEvents]);
 
   useEffect(() => {
     if (!hasHydrated) return;
