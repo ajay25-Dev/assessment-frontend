@@ -2138,16 +2138,22 @@ export function AssessmentShell({
       }
 
       if (parsedTestResults && parsedTestResults.test_results?.length > 0) {
-        // Animate test results one by one
-        setTestResults(parsedTestResults);
+        const showCaseResults = activeQuestion.section !== "OOPs";
+        if (showCaseResults) {
+          setTestResults(parsedTestResults);
+        } else {
+          setTestResults(null);
+        }
         setTemporaryScorePreviewByQuestion((current) => ({
           ...current,
           [activeQuestion.id]: buildTemporaryScorePreview(activeQuestion, activeAnswer, parsedTestResults),
         }));
         const total = parsedTestResults.test_results.length;
-        for (let i = 0; i < total; i++) {
-          setAnimatingTestIndex(i);
-          await new Promise((r) => setTimeout(r, 150));
+        if (showCaseResults) {
+          for (let i = 0; i < total; i++) {
+            setAnimatingTestIndex(i);
+            await new Promise((r) => setTimeout(r, 150));
+          }
         }
         setAnimatingTestIndex(-1);
 
@@ -3160,7 +3166,7 @@ export function AssessmentShell({
 
           <div ref={resultsRef} className={`${activeTab === "results" ? "block" : "hidden"} scroll-mt-24 border-t border-slate-200 bg-slate-950 p-3 lg:block sm:p-4`}>
             <div className="grid gap-3">
-              {testResults && activeQuestion.engine === "code" ? (
+              {testResults && activeQuestion.engine === "code" && activeQuestion.section !== "OOPs" ? (
                 <TestResultsPanel
                   testResults={testResults}
                   animatingIndex={animatingTestIndex}

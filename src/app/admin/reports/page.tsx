@@ -586,7 +586,7 @@ export default async function AdminReportsPage({
         })}
       </section>
 
-      <section className={adminUi.sectionCard}>
+      {/* <section className={adminUi.sectionCard}>
         <div className="flex flex-col gap-3 border-b border-slate-100 pb-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <h3 className={adminUi.sectionTitle}>Disqualified candidates</h3>
@@ -635,7 +635,7 @@ export default async function AdminReportsPage({
             No disqualified candidates match the current filters.
           </div>
         )}
-      </section>
+      </section> */}
 
       <section className={adminUi.sectionCard}>
         <div className="flex flex-col gap-3 border-b border-slate-100 pb-4 lg:flex-row lg:items-center lg:justify-between">

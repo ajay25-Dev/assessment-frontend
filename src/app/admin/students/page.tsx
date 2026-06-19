@@ -610,6 +610,14 @@ export default async function StudentsPage({
             <p className="mt-2 leading-6">
               If a row does not include a password, the fallback password below will be used.
             </p>
+            <div className="mt-4 rounded-[12px] border border-slate-200 bg-white p-3">
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Sample CSV</p>
+              <pre className="mt-2 overflow-x-auto whitespace-pre rounded-[8px] bg-slate-950 p-3 font-mono text-xs leading-6 text-slate-100">
+{`full_name,email,roll_number,password,batch
+Ananya Sharma,ananya.sharma@example.com,CS-001,Student@123,June Batch
+Rahul Mehta,rahul.mehta@example.com,CS-002,,June Batch`}
+              </pre>
+            </div>
           </div>
 
           <form action={bulkUploadStudents} className="mt-6 grid gap-4">
