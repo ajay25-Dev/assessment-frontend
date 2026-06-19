@@ -1,30 +1,10 @@
-import { promises as fs } from "fs";
 import Link from "next/link";
 import { revalidatePath } from "next/cache";
-import { resolve } from "path";
-import { fetchAssessmentBank } from "@/lib/assessment-bank-api";
+import { fetchAssessmentBank, updateAssessmentSecuritySettings } from "@/lib/assessment-bank-api";
 import { type AssessmentSecurityPolicy } from "@/data/assessment-bank";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-
-const questionBankPath = resolve(
-  process.cwd(),
-  "..",
-  "assessment-backend",
-  "src",
-  "question-bank",
-  "data",
-  "joraiq-question-bank.json",
-);
-
-type QuestionBankFile = {
-  assessment?: {
-    security?: AssessmentSecurityPolicy;
-    [key: string]: unknown;
-  };
-  [key: string]: unknown;
-};
 
 function parseBoolean(value: FormDataEntryValue | null) {
   return value !== null;
@@ -38,11 +18,10 @@ function parsePositiveInt(value: FormDataEntryValue | null, fallback: number) {
 async function saveSecuritySettings(formData: FormData) {
   "use server";
 
-  const raw = await fs.readFile(questionBankPath, "utf8");
-  const bank = JSON.parse(raw) as QuestionBankFile;
-  const currentSecurity = bank.assessment?.security || {};
+  const assessmentBank = await fetchAssessmentBank();
+  const currentSecurity = assessmentBank.assessment.security || {};
 
-  const nextSecurity: AssessmentSecurityPolicy = {
+  const nextSecurity: Required<AssessmentSecurityPolicy> = {
     tab_switch_protection_enabled: parseBoolean(formData.get("tab_switch_protection_enabled")),
     max_tab_switch_events: parsePositiveInt(formData.get("max_tab_switch_events"), currentSecurity.max_tab_switch_events ?? 2),
     auto_submit_on_max_events: parseBoolean(formData.get("auto_submit_on_max_events")),
@@ -54,12 +33,7 @@ async function saveSecuritySettings(formData: FormData) {
     restart_timer_on_login: parseBoolean(formData.get("restart_timer_on_login")),
   };
 
-  bank.assessment = {
-    ...(bank.assessment || {}),
-    security: nextSecurity,
-  };
-
-  await fs.writeFile(questionBankPath, `${JSON.stringify(bank, null, 2)}\n`, "utf8");
+  await updateAssessmentSecuritySettings(nextSecurity);
   revalidatePath("/admin/settings");
   revalidatePath("/admin/question-bank");
   revalidatePath("/admin");

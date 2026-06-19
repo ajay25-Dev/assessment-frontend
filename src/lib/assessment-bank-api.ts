@@ -23,6 +23,25 @@ function backendBaseUrl() {
   ).replace(/\/$/, "");
 }
 
+export async function updateAssessmentSecuritySettings(
+  security: Required<AssessmentSecurityPolicy>,
+): Promise<Required<AssessmentSecurityPolicy>> {
+  const response = await fetch(`${backendBaseUrl()}/question-bank/security`, {
+    cache: "no-store",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    method: "PATCH",
+    body: JSON.stringify(security),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Could not save security settings: ${response.status}`);
+  }
+
+  return (await response.json()) as Required<AssessmentSecurityPolicy>;
+}
+
 export async function fetchAssessmentBank(): Promise<AssessmentBank> {
   const response = await fetch(`${backendBaseUrl()}/question-bank`, {
     cache: "no-store",
