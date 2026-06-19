@@ -84,7 +84,11 @@ type SqlRunResponse = {
 };
 
 function visibleTestResultsForQuestion(question: AssessmentQuestion): TestResultsOutput | null {
-  const cases = question.open_test_cases?.length ? question.open_test_cases : question.test_cases?.slice(0, 5) || [];
+  const cases = question.section === "OOPs"
+    ? []
+    : question.open_test_cases?.length
+      ? question.open_test_cases
+      : question.test_cases?.slice(0, 5) || [];
   if (!cases.length) return null;
 
   return {
@@ -937,6 +941,12 @@ function QuestionNavigator({
 }
 
 function QuestionPrompt({ question, visible }: { question: AssessmentQuestion; visible: boolean }) {
+  const openTestCases = question.section === "OOPs"
+    ? []
+    : question.open_test_cases?.length
+      ? question.open_test_cases
+      : question.test_cases?.slice(0, 5) || [];
+
   return (
     <article className={`${visible ? "block" : "hidden"} min-h-0 overflow-auto border-r border-slate-200 bg-white p-4 lg:block lg:h-fit lg:self-start sm:p-5`}>
       <div className="prose prose-slate max-w-none">
@@ -979,7 +989,7 @@ function QuestionPrompt({ question, visible }: { question: AssessmentQuestion; v
         </div>
       ) : null}
 
-      {question.test_cases?.length ? (
+      {openTestCases.length ? (
         <div className="mt-4">
           <h3 className="text-sm font-semibold text-slate-950">Open Test Cases</h3>
           <p className="mt-1 text-xs leading-5 text-slate-500">
@@ -997,7 +1007,7 @@ function QuestionPrompt({ question, visible }: { question: AssessmentQuestion; v
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white">
-                  {question.test_cases.slice(0, 5).map((testCase) => (
+                  {openTestCases.map((testCase) => (
                     <tr key={testCase.number}>
                       <td className="px-3 py-2 font-semibold text-slate-700">{testCase.number}</td>
                       <td className="px-3 py-2 font-mono text-slate-700">{testCase.input}</td>
