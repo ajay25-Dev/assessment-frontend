@@ -599,25 +599,23 @@ export default async function StudentsPage({
             </div>
           </div>
 
-          <div className="mt-5 rounded-[20px] border border-[var(--color-border-subtle)] bg-[var(--color-bg-muted)] p-4 text-sm text-slate-700">
-            <p className="font-medium text-slate-900">CSV columns</p>
-            <p className="mt-2 leading-6">
-              Required: <span className="font-mono">full_name</span>, <span className="font-mono">email</span>. Optional:
-              <span className="font-mono"> roll_number</span>,
-              <span className="font-mono"> password</span>, <span className="font-mono">batch</span>, or{" "}
-              <span className="font-mono">batch_id</span>.
-            </p>
-            <p className="mt-2 leading-6">
-              If a row does not include a password, the fallback password below will be used.
-            </p>
-            <div className="mt-4 rounded-[12px] border border-slate-200 bg-white p-3">
-              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Sample CSV</p>
-              <pre className="mt-2 overflow-x-auto whitespace-pre rounded-[8px] bg-slate-950 p-3 font-mono text-xs leading-6 text-slate-100">
-{`full_name,email,roll_number,password,batch
-Ananya Sharma,ananya.sharma@example.com,CS-001,Student@123,June Batch
-Rahul Mehta,rahul.mehta@example.com,CS-002,,June Batch`}
-              </pre>
+          <div className="mt-5 flex flex-col gap-3 rounded-[20px] border border-[var(--color-border-subtle)] bg-[var(--color-bg-muted)] p-4 text-sm text-slate-700 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="font-medium text-slate-900">CSV columns</p>
+              <p className="mt-2 leading-6">
+                Required: <span className="font-mono">full_name</span>, <span className="font-mono">email</span>. Optional:
+                <span className="font-mono"> roll_number</span>,
+                <span className="font-mono"> password</span>, <span className="font-mono">batch</span>, or{" "}
+                <span className="font-mono">batch_id</span>.
+              </p>
             </div>
+            <a
+              href="/sample-students.csv"
+              download
+              className="inline-flex w-fit items-center justify-center rounded-[12px] border border-[var(--color-primary-200)] bg-white px-3 py-2 text-sm font-semibold text-[var(--color-primary-700)] shadow-sm transition hover:bg-[var(--color-primary-50)]"
+            >
+              Download sample.csv
+            </a>
           </div>
 
           <form action={bulkUploadStudents} className="mt-6 grid gap-4">

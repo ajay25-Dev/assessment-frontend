@@ -26,7 +26,7 @@ function backendBaseUrl() {
 export async function updateAssessmentSecuritySettings(
   security: Required<AssessmentSecurityPolicy>,
 ): Promise<Required<AssessmentSecurityPolicy>> {
-  const response = await fetch(`${backendBaseUrl()}/question-bank/security`, {
+  const response = await fetch(`${backendBaseUrl()}/settings/security`, {
     cache: "no-store",
     headers: {
       "Content-Type": "application/json",

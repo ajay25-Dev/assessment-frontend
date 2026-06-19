@@ -1448,6 +1448,7 @@ function loadSavedSnapshot(assessmentBank: AssessmentBank, assessmentInstanceId?
 
   const saved = window.localStorage.getItem(storageKey);
   if (!saved) {
+    window.localStorage.removeItem(logoutCountKey);
     return fallback;
   }
 
@@ -1466,9 +1467,7 @@ function loadSavedSnapshot(assessmentBank: AssessmentBank, assessmentInstanceId?
     };
     const startedAt = parsed.startedAt || window.localStorage.getItem(`${storageKey}:startedAt`);
     const persistedAttemptId = window.localStorage.getItem(attemptIdKey);
-    const logoutCount = Number(
-      window.localStorage.getItem(logoutCountKey) || parsed.logoutCount || 0,
-    );
+    window.localStorage.removeItem(logoutCountKey);
     const savedActiveQuestion = parsed.activeQuestionId
       ? questions.find((question) => question.id === parsed.activeQuestionId)
       : null;
@@ -1488,7 +1487,7 @@ function loadSavedSnapshot(assessmentBank: AssessmentBank, assessmentInstanceId?
       timerPolicy: parsed.timerPolicy || "resume_on_login",
       tabEvents: parsed.tabEvents || 0,
       cameraEvents: parsed.cameraEvents || 0,
-      logoutCount,
+      logoutCount: 0,
       persistedAttemptId,
     };
   } catch {
@@ -1619,15 +1618,15 @@ export function AssessmentShell({
     const envCameraMaxEvents = publicEnvNumber(process.env.NEXT_PUBLIC_ASSESSMENT_CAMERA_MAX_EVENTS);
 
     return {
-      tabSwitchProtectionEnabled: envTabEnabled ?? configured?.tab_switch_protection_enabled ?? true,
+      tabSwitchProtectionEnabled: envTabEnabled ?? configured?.tab_switch_protection_enabled ?? false,
       maxTabSwitchEvents: envTabMaxEvents ?? configured?.max_tab_switch_events ?? 2,
       autoSubmitOnMaxEvents: configured?.auto_submit_on_max_events ?? true,
       cameraProctoringEnabled: envCameraEnabled ?? configured?.camera_proctoring_enabled ?? false,
       maxCameraEvents: envCameraMaxEvents ?? configured?.max_camera_events ?? 1,
       autoSubmitOnCameraEvents: configured?.auto_submit_on_camera_events ?? true,
-      copyPasteBlockEnabled: configured?.copy_paste_block_enabled ?? true,
-      inspectModeBlockEnabled: configured?.inspect_mode_block_enabled ?? true,
-      restartTimerOnLogin: configured?.restart_timer_on_login ?? true,
+      copyPasteBlockEnabled: configured?.copy_paste_block_enabled ?? false,
+      inspectModeBlockEnabled: configured?.inspect_mode_block_enabled ?? false,
+      restartTimerOnLogin: configured?.restart_timer_on_login ?? false,
     };
   }, [assessmentBank.assessment.security]);
   const tabSecurity = useMemo(() => {
@@ -1707,7 +1706,7 @@ export function AssessmentShell({
         setPersistedAttemptId(session.attempt_id);
         setSessionStartedAt(session.started_at);
         setSessionTimerPolicy(session.timer_policy);
-        setLogoutCount(session.session_reset_count);
+        setLogoutCount(0);
         const activeBootstrapSection = sectionOrder[0];
         const activeStartedAt = new Date().toISOString();
         setActiveSection(activeBootstrapSection);
@@ -1719,7 +1718,7 @@ export function AssessmentShell({
 
         localStorage.setItem(`${storageKey}:startedAt`, session.started_at);
         localStorage.setItem(`${storageKey}:attemptId`, session.attempt_id);
-        localStorage.setItem(logoutCountKey, String(session.session_reset_count));
+        localStorage.setItem(logoutCountKey, "0");
         localStorage.setItem(
           storageKey,
           JSON.stringify({

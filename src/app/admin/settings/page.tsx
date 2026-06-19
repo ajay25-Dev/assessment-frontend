@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { revalidatePath } from "next/cache";
 import { fetchAssessmentBank, updateAssessmentSecuritySettings } from "@/lib/assessment-bank-api";
 import { type AssessmentSecurityPolicy } from "@/data/assessment-bank";
@@ -66,7 +65,7 @@ export default async function AdminSettingsPage() {
                   <input
                     name="tab_switch_protection_enabled"
                     type="checkbox"
-                    defaultChecked={security.tab_switch_protection_enabled ?? true}
+                    defaultChecked={security.tab_switch_protection_enabled ?? false}
                     className="h-4 w-4 rounded border-slate-300 text-emerald-700 focus:ring-emerald-600"
                   />
                   Enable tab / window switch detection
@@ -85,7 +84,7 @@ export default async function AdminSettingsPage() {
                   <input
                     name="auto_submit_on_max_events"
                     type="checkbox"
-                    defaultChecked={security.auto_submit_on_max_events ?? true}
+                    defaultChecked={security.auto_submit_on_max_events ?? false}
                     className="h-4 w-4 rounded border-slate-300 text-emerald-700 focus:ring-emerald-600"
                   />
                   Auto-submit when tab violations hit the limit
@@ -100,7 +99,7 @@ export default async function AdminSettingsPage() {
                   <input
                     name="camera_proctoring_enabled"
                     type="checkbox"
-                    defaultChecked={security.camera_proctoring_enabled ?? true}
+                    defaultChecked={security.camera_proctoring_enabled ?? false}
                     className="h-4 w-4 rounded border-slate-300 text-emerald-700 focus:ring-emerald-600"
                   />
                   Require camera access before the assessment starts
@@ -119,7 +118,7 @@ export default async function AdminSettingsPage() {
                   <input
                     name="auto_submit_on_camera_events"
                     type="checkbox"
-                    defaultChecked={security.auto_submit_on_camera_events ?? true}
+                    defaultChecked={security.auto_submit_on_camera_events ?? false}
                     className="h-4 w-4 rounded border-slate-300 text-emerald-700 focus:ring-emerald-600"
                   />
                   Auto-submit when camera violations hit the limit
@@ -134,7 +133,7 @@ export default async function AdminSettingsPage() {
                   <input
                     name="copy_paste_block_enabled"
                     type="checkbox"
-                    defaultChecked={security.copy_paste_block_enabled ?? true}
+                    defaultChecked={security.copy_paste_block_enabled ?? false}
                     className="h-4 w-4 rounded border-slate-300 text-emerald-700 focus:ring-emerald-600"
                   />
                   Block copy, paste, cut, and select-all shortcuts
@@ -143,7 +142,7 @@ export default async function AdminSettingsPage() {
                   <input
                     name="inspect_mode_block_enabled"
                     type="checkbox"
-                    defaultChecked={security.inspect_mode_block_enabled ?? true}
+                    defaultChecked={security.inspect_mode_block_enabled ?? false}
                     className="h-4 w-4 rounded border-slate-300 text-emerald-700 focus:ring-emerald-600"
                   />
                   Block inspect / devtools shortcuts and context menu
@@ -158,7 +157,7 @@ export default async function AdminSettingsPage() {
                   <input
                     name="restart_timer_on_login"
                     type="checkbox"
-                    defaultChecked={security.restart_timer_on_login ?? true}
+                    defaultChecked={security.restart_timer_on_login ?? false}
                     className="h-4 w-4 rounded border-slate-300 text-emerald-700 focus:ring-emerald-600"
                   />
                   Restart the full 3-hour timer on each login
@@ -169,16 +168,11 @@ export default async function AdminSettingsPage() {
 
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-4">
             <p className="text-sm leading-6 text-slate-600">
-              Saving updates the bank JSON directly. The assessment runtime picks this up on the next bootstrap.
+              Saving updates backend settings. The assessment runtime picks this up on the next bootstrap.
             </p>
-            <div className="flex flex-wrap gap-3">
-              <Link href="/admin/question-bank" className="rounded-[8px] border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-                View Question Bank
-              </Link>
-              <button type="submit" className="rounded-[8px] bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800">
-                Save Settings
-              </button>
-            </div>
+            <button type="submit" className="rounded-[8px] bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800">
+              Save Settings
+            </button>
           </div>
         </form>
       </section>
