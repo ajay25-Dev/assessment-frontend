@@ -12,6 +12,7 @@ import {
   Database,
   FileQuestion,
   Flag,
+  Loader2,
   Menu,
   PanelLeftClose,
   PanelLeftOpen,
@@ -1548,6 +1549,7 @@ export function AssessmentShell({
   const [persistedAttemptId, setPersistedAttemptId] = useState<string | null>(initialSnapshot.persistedAttemptId);
   const [persistedDsaEvaluationByQuestion, setPersistedDsaEvaluationByQuestion] = useState<Record<string, Record<string, unknown> | null>>({});
   const [isExecuting, setIsExecuting] = useState(false);
+  const [submittingQuestionId, setSubmittingQuestionId] = useState<string | null>(null);
   const [isFinalizing, setIsFinalizing] = useState(false);
   const [integrityViolation, setIntegrityViolation] = useState<IntegrityViolation | null>(null);
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
@@ -2463,29 +2465,36 @@ export function AssessmentShell({
     scrollToResults();
   }
 
-  function submitQuestion() {
-    if (isExecuting || isIntegrityLocked) {
+  async function submitQuestion() {
+    if (isExecuting || submittingQuestionId || isIntegrityLocked) {
       updateActiveAnswer({
         resultMessage: isIntegrityLocked
           ? "This assessment has been disqualified because a cheating signal was detected."
-          : "A compiler request is already running.",
+          : submittingQuestionId
+            ? "Question submission is already running."
+            : "A compiler request is already running.",
       });
       setActiveTab("results");
       scrollToResults();
       return;
     }
 
-    if (activeQuestion.engine === "code") {
-      void executeCode("submit");
-      return;
-    }
+    setSubmittingQuestionId(activeQuestion.id);
+    try {
+      if (activeQuestion.engine === "code") {
+        await executeCode("submit");
+        return;
+      }
 
-    if (activeQuestion.engine === "sql") {
-      void executeSql("submit");
-      return;
-    }
+      if (activeQuestion.engine === "sql") {
+        await executeSql("submit");
+        return;
+      }
 
-    void submitMcqQuestion();
+      await submitMcqQuestion();
+    } finally {
+      setSubmittingQuestionId(null);
+    }
   }
 
   const saveNow = useCallback(() => {
@@ -2889,6 +2898,8 @@ export function AssessmentShell({
   const marked = Object.values(answers).filter((answer) => answer.marked).length;
   const isTimedOut = remainingSeconds === 0;
   const isSectionTimedOut = sectionRemainingSeconds === 0;
+  const isSubmittingQuestion = submittingQuestionId === activeQuestion.id;
+  const isRunningQuestion = isExecuting && !isSubmittingQuestion;
   const previousQuestion = activeIndex > 0 ? questions[activeIndex - 1] : null;
   const nextQuestion = activeIndex >= 0 && activeIndex < questions.length - 1
     ? questions[activeIndex + 1]
@@ -3031,7 +3042,7 @@ export function AssessmentShell({
               submitted={submitted}
               activeSection={activeSection}
               sectionStatuses={sectionStatuses}
-              disabled={isExecuting || isIntegrityLocked}
+              disabled={isExecuting || isSubmittingQuestion || isIntegrityLocked}
               pinned={isQuestionPanelPinned}
               onTogglePinned={() => setIsQuestionPanelPinned((value) => !value)}
               onSelect={changeQuestion}
@@ -3105,7 +3116,7 @@ export function AssessmentShell({
                 submitted={submitted}
                 activeSection={activeSection}
                 sectionStatuses={sectionStatuses}
-                disabled={isExecuting || isIntegrityLocked}
+                disabled={isExecuting || isSubmittingQuestion || isIntegrityLocked}
                 pinned
                 onSelect={changeQuestion}
               />
@@ -3613,8 +3624,8 @@ export function AssessmentShell({
               <div className="flex gap-2">
                 <button
                   type="button"
-                  disabled={!previousQuestion || isExecuting}
-                  onClick={() => !isExecuting && previousQuestion && changeQuestion(previousQuestion.id)}
+                  disabled={!previousQuestion || isExecuting || isSubmittingQuestion}
+                  onClick={() => !isExecuting && !isSubmittingQuestion && previousQuestion && changeQuestion(previousQuestion.id)}
                   className="inline-flex h-10 items-center gap-2 rounded-[10px] border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-40"
                 >
                   <ChevronLeft size={16} />
@@ -3622,8 +3633,8 @@ export function AssessmentShell({
                 </button>
                 <button
                   type="button"
-                  disabled={!nextQuestion || isExecuting}
-                  onClick={() => !isExecuting && nextQuestion && changeQuestion(nextQuestion.id)}
+                  disabled={!nextQuestion || isExecuting || isSubmittingQuestion}
+                  onClick={() => !isExecuting && !isSubmittingQuestion && nextQuestion && changeQuestion(nextQuestion.id)}
                   className="inline-flex h-10 items-center gap-2 rounded-[10px] border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-40"
                 >
                   Next
@@ -3644,20 +3655,20 @@ export function AssessmentShell({
                 <button
                   type="button"
                   onClick={runQuestion}
-                  disabled={isExecuting || isIntegrityLocked}
+                  disabled={isExecuting || isSubmittingQuestion || isIntegrityLocked}
                   className="inline-flex h-10 items-center gap-2 rounded-[8px] border border-slate-300 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
                 >
                   <Play size={16} />
-                  {isExecuting ? "Running..." : activeQuestion.engine === "mcq" ? "Check" : "Run"}
+                  {isRunningQuestion ? "Running..." : activeQuestion.engine === "mcq" ? "Check" : "Run"}
                 </button>
                 <button
                   type="button"
                   onClick={submitQuestion}
-                  disabled={isExecuting || isTimedOut || isIntegrityLocked}
+                  disabled={isExecuting || isSubmittingQuestion || isTimedOut || isIntegrityLocked}
                   className="inline-flex h-10 items-center gap-2 rounded-[10px] bg-emerald-700 px-3 text-sm font-semibold text-white shadow-sm shadow-emerald-900/10 hover:bg-emerald-800 disabled:opacity-40"
                 >
-                  <CheckCircle2 size={16} />
-                  Submit Question
+                  {isSubmittingQuestion ? <Loader2 className="animate-spin" size={16} /> : <CheckCircle2 size={16} />}
+                  {isSubmittingQuestion ? "Submitting..." : "Submit Question"}
                 </button>
               </div>
             </div>
