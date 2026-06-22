@@ -30,6 +30,7 @@ async function saveSecuritySettings(formData: FormData) {
     copy_paste_block_enabled: parseBoolean(formData.get("copy_paste_block_enabled")),
     inspect_mode_block_enabled: parseBoolean(formData.get("inspect_mode_block_enabled")),
     restart_timer_on_login: parseBoolean(formData.get("restart_timer_on_login")),
+    assessment_scoring_details_enabled: parseBoolean(formData.get("assessment_scoring_details_enabled")),
   };
 
   await updateAssessmentSecuritySettings(nextSecurity);
@@ -162,6 +163,15 @@ export default async function AdminSettingsPage() {
                   />
                   Restart the full 3-hour timer on each login
                 </label>
+                <label className="flex items-center gap-3 text-sm font-medium text-slate-700">
+                  <input
+                    name="assessment_scoring_details_enabled"
+                    type="checkbox"
+                    defaultChecked={security.assessment_scoring_details_enabled ?? true}
+                    className="h-4 w-4 rounded border-slate-300 text-emerald-700 focus:ring-emerald-600"
+                  />
+                  Show assessment scoring details in the live assessment shell
+                </label>
               </div>
             </fieldset>
           </div>
@@ -179,3 +189,4 @@ export default async function AdminSettingsPage() {
     </div>
   );
 }
+

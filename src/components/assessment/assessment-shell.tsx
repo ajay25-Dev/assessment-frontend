@@ -161,7 +161,7 @@ type IntegrityViolation = {
   source: "tab_switch" | "camera" | "copy_paste" | "inspect_mode" | "logout" | "browser_back";
 };
 
-const defaultLanguage = "python";
+const defaultLanguage = "cpp";
 const localProctoringOverride = process.env.NEXT_PUBLIC_DISABLE_PROCTORING;
 const localProctoringDisabled =
   localProctoringOverride === "true" ||
@@ -428,6 +428,46 @@ function initialAnswer(question: AssessmentQuestion): AnswerState {
     testResults: null,
     sqlResult: null,
   };
+}
+
+function normalizeSavedAnswer(question: AssessmentQuestion, answer: AnswerState | undefined) {
+  const fallback = initialAnswer(question);
+  if (!answer) return fallback;
+
+  const storedStarterCode =
+    question.engine === "sql" ? "SELECT *\nFROM " : question.starter_code?.[answer.language] || "";
+  const untouched =
+    answer.status === "unvisited" &&
+    answer.runs === 0 &&
+    answer.submissions === 0 &&
+    (!String(answer.value || "").trim() || String(answer.value || "").trim() === storedStarterCode.trim()) &&
+    !answer.selectedOptions.length &&
+    !answer.testResults &&
+    !answer.sqlResult;
+
+  if (question.engine === "sql") {
+    return {
+      ...fallback,
+      ...answer,
+      language: "sql",
+    };
+  }
+
+  const nextLanguage =
+    answer.language && question.allowed_languages?.includes(answer.language)
+      ? answer.language
+      : fallback.language;
+
+  return untouched
+    ? {
+        ...fallback,
+        ...answer,
+        language: fallback.language,
+      }
+    : {
+        ...answer,
+        language: nextLanguage,
+      };
 }
 
 function scoreToText(value: unknown) {
@@ -1489,7 +1529,7 @@ function loadSavedSnapshot(assessmentBank: AssessmentBank, assessmentInstanceId?
     const activeElapsed = activeSectionElapsedSeconds(sectionElapsedSecondsBySection, activeSection, activeSectionStartedAt);
     return {
       activeQuestionId: savedActiveQuestion?.id || firstQuestionInSection(questions, activeSection),
-      answers: sanitizeAnswersForStorage({ ...fallback.answers, ...(parsed.answers || {}) }),
+      answers: sanitizeAnswersForStorage(Object.fromEntries(questions.map((question) => [question.id, normalizeSavedAnswer(question, (parsed.answers || {})[question.id])])) as Record<string, AnswerState>),
       activeSection,
       sectionElapsedSecondsBySection,
       activeSectionStartedAt,
@@ -1580,6 +1620,7 @@ export function AssessmentShell({
   const [persistedOopsEvaluationByQuestion, setPersistedOopsEvaluationByQuestion] = useState<Record<string, Record<string, unknown> | null>>({});
   const [animatingTestIndex, setAnimatingTestIndex] = useState<number>(-1);
   const resultsRef = useRef<HTMLDivElement>(null);
+  const mainContentRef = useRef<HTMLDivElement>(null);
   const cameraVideoRef = useRef<HTMLVideoElement>(null);
   const autoSubmitStartedRef = useRef(false);
   const pendingTabWarningRef = useRef<number | null>(null);
@@ -1640,8 +1681,10 @@ export function AssessmentShell({
       copyPasteBlockEnabled: configured?.copy_paste_block_enabled ?? false,
       inspectModeBlockEnabled: configured?.inspect_mode_block_enabled ?? false,
       restartTimerOnLogin: configured?.restart_timer_on_login ?? false,
+      assessmentScoringDetailsEnabled: configured?.assessment_scoring_details_enabled ?? true,
     };
   }, [assessmentBank.assessment.security]);
+  const showAssessmentScoringDetails = assessmentSecurity.assessmentScoringDetailsEnabled;
   const tabSecurity = useMemo(() => {
     if (localProctoringDisabled) {
       return {
@@ -1973,6 +2016,13 @@ export function AssessmentShell({
       resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
   }
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      mainContentRef.current?.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeQuestionId]);
 
   function changeQuestion(questionId: string) {
     const targetQuestion = questions.find((question) => question.id === questionId);
@@ -2423,7 +2473,9 @@ export function AssessmentShell({
     updateActiveAnswer({
       runs: activeAnswer.runs + 1,
       status: "ran",
-      resultMessage: "MCQ answer saved locally. Review the temporary score preview below.",
+      resultMessage: showAssessmentScoringDetails
+        ? "MCQ answer saved locally. Review the temporary score preview below."
+        : "MCQ answer saved locally.",
     });
     setTemporaryScorePreviewByQuestion((current) => ({
       ...current,
@@ -2434,7 +2486,9 @@ export function AssessmentShell({
   }
 
   async function submitMcqQuestion() {
-    const resultMessage = "Question submitted. Review the temporary score preview below.";
+    const resultMessage = showAssessmentScoringDetails
+      ? "Question submitted. Review the temporary score preview below."
+      : "Question submitted.";
     const nextAnswer: AnswerState = {
       ...activeAnswer,
       submissions: activeAnswer.submissions + 1,
@@ -2900,12 +2954,24 @@ export function AssessmentShell({
   const isSectionTimedOut = sectionRemainingSeconds === 0;
   const isSubmittingQuestion = submittingQuestionId === activeQuestion.id;
   const isRunningQuestion = isExecuting && !isSubmittingQuestion;
+  const showDsaRunCases =
+    activeQuestion.section === "DSA" &&
+    activeQuestion.engine === "code" &&
+    activeAnswer.status === "ran" &&
+    Boolean(testResults?.test_results?.length);
+  const showCodeResultsPanel =
+    showDsaRunCases ||
+    (showAssessmentScoringDetails &&
+      Boolean(testResults?.test_results?.length) &&
+      activeQuestion.engine === "code" &&
+      activeQuestion.section !== "OOPs");
+  const showResultsPanel = showCodeResultsPanel || showAssessmentScoringDetails || activeQuestion.engine === "sql";
   const previousQuestion = activeIndex > 0 ? questions[activeIndex - 1] : null;
   const nextQuestion = activeIndex >= 0 && activeIndex < questions.length - 1
     ? questions[activeIndex + 1]
     : null;
   return (
-    <main className="flex min-h-dvh flex-col bg-[radial-gradient(circle_at_top_left,#e7fff4_0,#f7faf8_30%,#eef3f0_100%)] text-slate-950">
+    <main className="flex h-dvh overflow-hidden flex-col bg-[radial-gradient(circle_at_top_left,#e7fff4_0,#f7faf8_30%,#eef3f0_100%)] text-slate-950">
       {cameraSecurity.enabled && cameraStream ? (
         <div
           className="fixed z-50 w-36 touch-none overflow-hidden rounded-[8px] border border-white/70 bg-slate-950 shadow-xl sm:w-44"
@@ -3030,10 +3096,11 @@ export function AssessmentShell({
         </div>
       </header>
 
-      <div className={`grid flex-1 ${isQuestionPanelPinned ? "lg:grid-cols-[300px_1fr]" : "lg:grid-cols-[64px_1fr]"}`}>
-        <aside className="hidden border-r border-slate-200 bg-white lg:block">
+      <div className={`grid min-h-0 flex-1 overflow-hidden ${isQuestionPanelPinned ? "lg:grid-cols-[300px_1fr]" : "lg:grid-cols-[64px_1fr]"}`}>
+        <aside className="hidden h-full min-h-0 overflow-hidden border-r border-slate-200 bg-white lg:block">
           {isQuestionPanelPinned ? (
-            <QuestionNavigator
+            <div data-question-navigator-scroll className="h-full min-h-0 overflow-y-scroll overscroll-contain [scrollbar-gutter:stable] [scrollbar-width:thin] [scrollbar-color:#94a3b8_transparent] [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-400/70 [&::-webkit-scrollbar-track]:bg-transparent">
+              <QuestionNavigator
               activeQuestionId={activeQuestion.id}
               assessmentBank={assessmentBank}
               answers={answers}
@@ -3045,8 +3112,9 @@ export function AssessmentShell({
               disabled={isExecuting || isSubmittingQuestion || isIntegrityLocked}
               pinned={isQuestionPanelPinned}
               onTogglePinned={() => setIsQuestionPanelPinned((value) => !value)}
-              onSelect={changeQuestion}
-            />
+                onSelect={changeQuestion}
+              />
+            </div>
           ) : (
             <div className="flex h-full flex-col items-center gap-4 bg-white px-2 py-4">
               <button
@@ -3100,13 +3168,14 @@ export function AssessmentShell({
 
         {navOpen ? (
           <div className="fixed inset-0 z-40 bg-slate-950/40 lg:hidden">
-            <aside className="h-full w-[86vw] max-w-sm overflow-auto bg-white shadow-xl">
+            <aside className="flex h-full w-[86vw] max-w-sm flex-col overflow-hidden bg-white shadow-xl">
               <div className="flex items-center justify-between border-b border-slate-200 p-4">
                 <h2 className="font-semibold">Questions</h2>
                 <button type="button" onClick={() => setNavOpen(false)} className="rounded-[8px] p-2 hover:bg-slate-100" aria-label="Close question navigator">
                   <X size={18} />
                 </button>
               </div>
+              <div data-question-navigator-scroll className="min-h-0 flex-1 overflow-y-scroll overscroll-contain [scrollbar-gutter:stable] [scrollbar-width:thin] [scrollbar-color:#94a3b8_transparent] [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-400/70 [&::-webkit-scrollbar-track]:bg-transparent">
               <QuestionNavigator
                 activeQuestionId={activeQuestion.id}
                 assessmentBank={assessmentBank}
@@ -3120,11 +3189,13 @@ export function AssessmentShell({
                 pinned
                 onSelect={changeQuestion}
               />
+            </div>
             </aside>
           </div>
         ) : null}
 
-        <section className="grid min-h-0 grid-rows-[auto_1fr_auto]">
+        <section className="">
+        {/* <section className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)_auto]"> */}
           <div className="border-b border-slate-200 bg-white/95 px-3 py-3 shadow-sm sm:px-5">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
@@ -3149,7 +3220,7 @@ export function AssessmentShell({
                   <span className="rounded-[8px] border border-red-200 bg-red-50 px-2 py-1 font-semibold text-red-800">
                     {isTimedOut ? "Assessment expired" : `${activeSection} time expired`}
                   </span>
-                ) : null}
+          ) : null}
                 <span className="rounded-[8px] border border-slate-200 px-2 py-1">Runs {activeAnswer.runs}</span>
                 <span className="rounded-[8px] border border-slate-200 px-2 py-1">Submits {activeAnswer.submissions}</span>
                 {/* <span className="rounded-[8px] border border-slate-200 px-2 py-1">Tab events {tabEvents}</span> */}
@@ -3172,50 +3243,55 @@ export function AssessmentShell({
             </div>
           </div>
 
-          <div className="grid min-h-0 gap-3 overflow-hidden p-3 lg:grid-cols-[minmax(380px,0.92fr)_minmax(460px,1.25fr)]">
-            <QuestionPrompt question={activeQuestion} questionNumber={activeSectionQuestionNumber} visible={activeTab === "problem"} />
-            <AnswerPanel
-              question={activeQuestion}
-              assessmentBank={assessmentBank}
-              answer={activeAnswer}
-              visible={activeTab === "answer"}
-              onValueChange={handleValueChange}
-              onLanguageChange={changeLanguage}
-              onMcqChange={handleMcqChange}
-            />
-          </div>
+          <div ref={mainContentRef} className={`min-h-0 overflow-y-auto overscroll-contain pb-24 [scrollbar-gutter:stable] ${activeQuestion.engine === "mcq" ? "" : "h-[calc(100dvh-300px)]"}`}>
+            <div className={`grid items-start gap-3 p-3 ${activeQuestion.engine === "mcq" ? "md:grid-cols-2 xl:grid-cols-[minmax(360px,0.82fr)_minmax(520px,1.18fr)]" : "lg:grid-cols-[minmax(380px,0.92fr)_minmax(460px,1.25fr)]"}`}>
+              <QuestionPrompt question={activeQuestion} questionNumber={activeSectionQuestionNumber} visible={activeTab === "problem"} />
+              <AnswerPanel
+                question={activeQuestion}
+                assessmentBank={assessmentBank}
+                answer={activeAnswer}
+                visible={activeTab === "answer"}
+                onValueChange={handleValueChange}
+                onLanguageChange={changeLanguage}
+                onMcqChange={handleMcqChange}
+              />
+            </div>
 
-          <div ref={resultsRef} className={`${activeTab === "results" ? "block" : "hidden"} scroll-mt-24 border-t border-slate-200 bg-slate-950 p-3 lg:block sm:p-4`}>
+            {showResultsPanel ? (
+            <div ref={resultsRef} className={`${activeTab === "results" ? "block" : "hidden"} scroll-mt-24 border-t border-slate-200 bg-slate-950 p-3 lg:block sm:p-4`}>
             <div className="grid gap-3">
-              {testResults && activeQuestion.engine === "code" && activeQuestion.section !== "OOPs" ? (
+              {showCodeResultsPanel && testResults && activeQuestion.engine === "code" && activeQuestion.section !== "OOPs" ? (
                 <TestResultsPanel
                   testResults={testResults}
                   animatingIndex={animatingTestIndex}
+                  title={showDsaRunCases ? "Open Run Cases" : undefined}
                 />
-              ) : null}
-              <div className="rounded-[10px] border border-slate-800 bg-slate-900 p-3 text-sm leading-6 text-slate-200">
-                <div className="mb-2 flex items-center justify-between text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-                  <span>Compiler Output</span>
-                  <span>{activeQuestion.engine.toUpperCase()}</span>
-                </div>
-                <pre className="whitespace-pre-wrap font-mono text-xs leading-6 text-slate-100">{activeAnswer.resultMessage}</pre>
-                {activeQuestion.engine === "code" && (activeAnswer.executionTime || typeof activeAnswer.executionMemory === "number") ? (
-                  <div className="mt-3 grid gap-2 text-xs text-slate-300 sm:grid-cols-2">
-                    <div className="rounded-[8px] border border-slate-700 bg-slate-950/60 px-3 py-2">
-                      <div className="font-semibold uppercase tracking-[0.12em] text-slate-400">Judge0 time</div>
-                      <div className="mt-1 text-sm text-slate-100">{activeAnswer.executionTime || "Not available"}</div>
-                    </div>
-                    <div className="rounded-[8px] border border-slate-700 bg-slate-950/60 px-3 py-2">
-                      <div className="font-semibold uppercase tracking-[0.12em] text-slate-400">Judge0 memory</div>
-                      <div className="mt-1 text-sm text-slate-100">
-                        {typeof activeAnswer.executionMemory === "number"
-                          ? `${activeAnswer.executionMemory} KB`
-                          : "Not available"}
+          ) : null}
+              {showAssessmentScoringDetails ? (
+                <div className="rounded-[10px] border border-slate-800 bg-slate-900 p-3 text-sm leading-6 text-slate-200">
+                  <div className="mb-2 flex items-center justify-between text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                    <span>Compiler Output</span>
+                    <span>{activeQuestion.engine.toUpperCase()}</span>
+                  </div>
+                  <pre className="whitespace-pre-wrap font-mono text-xs leading-6 text-slate-100">{activeAnswer.resultMessage}</pre>
+                  {activeQuestion.engine === "code" && (activeAnswer.executionTime || typeof activeAnswer.executionMemory === "number") ? (
+                    <div className="mt-3 grid gap-2 text-xs text-slate-300 sm:grid-cols-2">
+                      <div className="rounded-[8px] border border-slate-700 bg-slate-950/60 px-3 py-2">
+                        <div className="font-semibold uppercase tracking-[0.12em] text-slate-400">Judge0 time</div>
+                        <div className="mt-1 text-sm text-slate-100">{activeAnswer.executionTime || "Not available"}</div>
+                      </div>
+                      <div className="rounded-[8px] border border-slate-700 bg-slate-950/60 px-3 py-2">
+                        <div className="font-semibold uppercase tracking-[0.12em] text-slate-400">Judge0 memory</div>
+                        <div className="mt-1 text-sm text-slate-100">
+                          {typeof activeAnswer.executionMemory === "number"
+                            ? `${activeAnswer.executionMemory} KB`
+                            : "Not available"}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ) : null}
-              </div>
+          ) : null}
+                </div>
+          ) : null}
               {activeQuestion.engine === "sql" ? (
                 <SqlResultGrid
                   columns={sqlResult?.columns?.length ? sqlResult.columns : ["status", "message"]}
@@ -3225,8 +3301,8 @@ export function AssessmentShell({
                       : [{ status: sqlResult?.error ? "error" : "info", message: activeAnswer.resultMessage }]
                   }
                 />
-              ) : null}
-              {activeQuestion.engine === "sql" && activeSqlEvaluationOutput ? (
+          ) : null}
+              {showAssessmentScoringDetails && activeQuestion.engine === "sql" && activeSqlEvaluationOutput ? (
                 <div className="rounded-[10px] border border-sky-700/40 bg-sky-950/20 p-3 text-sm leading-6 text-sky-50">
                   <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-sky-200">
                     <span>SQL calculated output</span>
@@ -3305,8 +3381,8 @@ export function AssessmentShell({
                     </div>
                   </div>
                 </div>
-              ) : null}
-              {activeTemporaryScorePreview ? (
+          ) : null}
+              {showAssessmentScoringDetails && activeTemporaryScorePreview ? (
                 <div className="rounded-[10px] border border-emerald-700/40 bg-emerald-950/20 p-3 text-sm leading-6 text-emerald-50">
                   <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-emerald-200">
                     <span>{activeTemporaryScorePreview.label}</span>
@@ -3325,8 +3401,8 @@ export function AssessmentShell({
                     <div className="max-w-xl text-xs leading-5 text-emerald-100/80">{activeTemporaryScorePreview.note}</div>
                   </div>
                 </div>
-              ) : null}
-              {activeDsaCalculationOutput ? (
+          ) : null}
+              {showAssessmentScoringDetails && activeDsaCalculationOutput ? (
                 <div className="rounded-[10px] border border-sky-700/40 bg-sky-950/20 p-3 text-sm leading-6 text-sky-50">
                   <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-sky-200">
                     <span>DSA calculated output</span>
@@ -3469,8 +3545,8 @@ export function AssessmentShell({
                     </div>
                   </div>
                 </div>
-              ) : null}
-              {activeOopsCalculationOutput ? (
+          ) : null}
+              {showAssessmentScoringDetails && activeOopsCalculationOutput ? (
                 <div className="rounded-[10px] border border-violet-700/40 bg-violet-950/20 p-3 text-sm leading-6 text-violet-50">
                   <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-violet-200">
                     <span>OOPs calculated output</span>
@@ -3615,11 +3691,14 @@ export function AssessmentShell({
                     </div>
                   </div>
                 </div>
-              ) : null}
+          ) : null}
             </div>
           </div>
+          ) : null}
 
-          <div className="sticky bottom-0 z-20 border-t border-slate-200 bg-white/95 px-3 py-3 shadow-[0_-10px_30px_rgba(15,23,42,0.06)] backdrop-blur sm:px-5">
+          </div>
+
+          <div className={`fixed bottom-0 right-0 z-20 border-t border-slate-200 bg-white/95 px-3 py-3 shadow-[0_-10px_30px_rgba(15,23,42,0.06)] backdrop-blur sm:px-5 ${isQuestionPanelPinned ? "lg:left-[300px]" : "lg:left-[64px]"} left-0`}>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex gap-2">
                 <button
@@ -3706,8 +3785,32 @@ function QuestionNavigator({
   onTogglePinned?: () => void;
   onSelect: (questionId: string) => void;
 }) {
+  const activeQuestionButtonRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      const activeButton = activeQuestionButtonRef.current;
+      const scrollContainer = activeButton?.closest<HTMLElement>("[data-question-navigator-scroll]");
+      if (!activeButton || !scrollContainer) return;
+
+      const itemTop = activeButton.offsetTop;
+      const itemBottom = itemTop + activeButton.offsetHeight;
+      const visibleTop = scrollContainer.scrollTop;
+      const visibleBottom = visibleTop + scrollContainer.clientHeight;
+      const padding = 16;
+
+      if (itemTop < visibleTop + padding) {
+        scrollContainer.scrollTo({ top: Math.max(0, itemTop - padding), behavior: "smooth" });
+      } else if (itemBottom > visibleBottom - padding) {
+        scrollContainer.scrollTo({ top: itemBottom - scrollContainer.clientHeight + padding, behavior: "smooth" });
+      }
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeQuestionId]);
+
   return (
-    <div className="grid gap-5 p-4">
+    <div className="flex flex-col gap-5 p-4 pr-3">
       <div className="flex items-center justify-between gap-3">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Question Panel</p>
@@ -3762,6 +3865,7 @@ function QuestionNavigator({
                 return (
                   <button
                     key={question.id}
+                    ref={activeQuestionId === question.id ? activeQuestionButtonRef : undefined}
                     type="button"
                     disabled={disabled}
                     onClick={() => onSelect(question.id)}
@@ -3803,8 +3907,8 @@ function QuestionPrompt({
       : question.test_cases?.slice(0, 5) || [];
 
   return (
-    <article className={`${visible ? "block" : "hidden"} min-h-0 overflow-auto rounded-[14px] border border-slate-200 bg-white p-4 shadow-sm lg:block lg:h-fit lg:self-start sm:p-5`}>
-      <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-100 pb-3">
+    <article className={`${visible ? "block" : "hidden"} min-h-0 overflow-auto rounded-[14px] border border-slate-200 bg-white shadow-sm lg:block lg:h-fit lg:self-start ${question.engine === "mcq" ? "p-3 sm:p-4" : "p-4 sm:p-5"}`}>
+      <div className={`flex items-center justify-between gap-3 border-b border-slate-100 ${question.engine === "mcq" ? "mb-3 pb-2" : "mb-4 pb-3"}`}>
         <div>
           <p className="text-xs font-bold uppercase tracking-[0.16em] text-emerald-800">Problem Brief</p>
           <p className="mt-1 text-xs text-slate-500">Read the scenario carefully before coding.</p>
@@ -3815,7 +3919,7 @@ function QuestionPrompt({
       </div>
 
       {question.title || question.engine === "mcq" ? (
-        <div className="mb-3 rounded-[12px] border border-slate-200 bg-white px-4 py-3">
+        <div className={`rounded-[12px] border border-slate-200 bg-white ${question.engine === "mcq" ? "mb-2 px-3 py-2" : "mb-3 px-4 py-3"}`}>
           <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Question</p>
           <h2 className="mt-1 text-sm font-semibold leading-6 text-slate-950 break-words">
             {question.engine === "mcq" ? `Question ${questionNumber}` : question.title}
@@ -3823,7 +3927,7 @@ function QuestionPrompt({
         </div>
       ) : null}
 
-      <div className="rounded-[12px] bg-slate-50 p-4">
+      <div className={`rounded-[12px] bg-slate-50 ${question.engine === "mcq" ? "p-3" : "p-4"}`}>
         <p className="whitespace-pre-wrap break-words text-[13px] leading-6 text-slate-700">{question.prompt}</p>
       </div>
 
@@ -3838,8 +3942,8 @@ function QuestionPrompt({
         <div className="mt-4">
           <h3 className="text-sm font-semibold text-slate-950">Constraints</h3>
           <ul className="mt-2 grid gap-2 text-sm text-slate-700 sm:grid-cols-2">
-            {question.constraints.map((constraint) => (
-              <li key={constraint} className="rounded-[10px] bg-slate-50 px-3 py-2 font-mono text-xs">
+            {question.constraints.map((constraint, index) => (
+              <li key={`${constraint}-${index}`} className="rounded-[10px] bg-slate-50 px-3 py-2 font-mono text-xs">
                 {constraint}
               </li>
             ))}
@@ -3855,8 +3959,8 @@ function QuestionPrompt({
             Evaluation Focus
           </div>
           <div className="mt-2 flex flex-wrap gap-2">
-            {question.expected_approach.map((item) => (
-              <span key={item} className="rounded-full bg-white px-2 py-1 text-xs font-medium text-amber-900">
+            {question.expected_approach.map((item, index) => (
+              <span key={`${item}-${index}`} className="rounded-full bg-white px-2 py-1 text-xs font-medium text-amber-900">
                 {item}
               </span>
             ))}
@@ -3883,8 +3987,8 @@ function QuestionPrompt({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white">
-                  {openTestCases.map((testCase) => (
-                    <tr key={testCase.number}>
+                  {openTestCases.map((testCase, index) => (
+                    <tr key={`${testCase.number}-${index}`}>
                       <td className="px-3 py-2 font-semibold text-slate-700">{testCase.number}</td>
                       <td className="px-3 py-2 font-mono text-slate-700">{testCase.input}</td>
                       <td className="px-3 py-2 font-mono text-slate-700">{testCase.expected_output}</td>
@@ -3902,8 +4006,8 @@ function QuestionPrompt({
         <div className="mt-4 rounded-[12px] border border-slate-200 bg-slate-50 p-3">
           <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Expected Columns</p>
           <div className="mt-2 flex flex-wrap gap-2">
-            {question.expected_columns.map((column) => (
-              <span key={column} className="rounded-full bg-white px-2 py-1 font-mono text-xs text-slate-700">
+            {question.expected_columns.map((column, index) => (
+              <span key={`${column}-${index}`} className="rounded-full bg-white px-2 py-1 font-mono text-xs text-slate-700">
                 {column}
               </span>
             ))}
@@ -3935,7 +4039,7 @@ function SampleInputData({ question }: { question: AssessmentQuestion }) {
                   <thead className="bg-slate-100 text-slate-600">
                     <tr>
                       {(table.columns.length ? table.columns : table.rows[0]?.map((_, index) => `column_${index + 1}`) || []).map((column, ci, arr) => (
-                        <th key={column} className={`whitespace-nowrap border-b border-slate-200 px-3 py-2 font-mono font-semibold min-w-[100px] ${ci < arr.length - 1 ? 'border-r border-slate-200' : ''}`}>
+                        <th key={`${column}-${ci}`} className={`whitespace-nowrap border-b border-slate-200 px-3 py-2 font-mono font-semibold min-w-[100px] ${ci < arr.length - 1 ? 'border-r border-slate-200' : ''}`}>
                           {column}
                         </th>
                       ))}
@@ -3978,19 +4082,22 @@ function SampleInputData({ question }: { question: AssessmentQuestion }) {
 function TestResultsPanel({
   testResults,
   animatingIndex,
+  title,
 }: {
   testResults: TestResultsOutput;
   animatingIndex: number;
+  title?: string;
 }) {
   const { test_results, total, passed } = testResults;
   const allVisible = animatingIndex < 0;
   const visibleOnly = test_results.every((test) => test.displayStatus === "visible");
+  const heading = title || (visibleOnly ? "Visible Test Cases" : "Test Results");
 
   return (
     <div className="rounded-[8px] border border-slate-200 bg-white overflow-hidden">
       <div className="border-b border-slate-200 bg-slate-50 px-3 py-2 flex items-center justify-between">
         <span className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
-          {visibleOnly ? "Visible Test Cases" : "Test Results"}
+          {heading}
         </span>
         <span className={`text-xs font-semibold ${visibleOnly ? "text-slate-600" : passed === total ? "text-emerald-700" : passed >= total / 2 ? "text-amber-700" : "text-red-700"}`}>
           {visibleOnly ? `${total} visible` : `${passed}/${total} passed`}
@@ -4091,8 +4198,8 @@ function AnswerPanel({
 }) {
   if (question.engine === "mcq") {
     return (
-      <section className={`${visible ? "block" : "hidden"} self-start overflow-auto rounded-[14px] border border-slate-200 bg-white p-4 shadow-sm lg:block lg:h-fit lg:max-h-none sm:p-5`}>
-        <div className="mb-4 border-b border-slate-100 pb-3">
+      <section className={`${visible ? "block" : "hidden"} self-start overflow-auto rounded-[14px] border border-slate-200 bg-white p-3 shadow-sm lg:block lg:h-fit lg:max-h-none sm:p-4`}>
+        <div className="mb-3 border-b border-slate-100 pb-2">
           <p className="text-xs font-bold uppercase tracking-[0.16em] text-emerald-800">Answer Console</p>
           <p className="mt-1 text-xs text-slate-500">Select the best option for this scenario.</p>
         </div>
@@ -4107,7 +4214,7 @@ function AnswerPanel({
       : (assessmentBank?.languages || []).filter((language) => question.allowed_languages?.includes(language.id));
 
   return (
-    <section className={`${visible ? "grid" : "hidden"} min-h-0 grid-rows-[auto_minmax(520px,1fr)] overflow-hidden rounded-[14px] border border-slate-800 bg-slate-950 shadow-sm lg:grid`}>
+    <section className={`${visible ? "grid" : "hidden"} min-h-0 h-full grid-rows-[auto_minmax(520px,1fr)] overflow-hidden rounded-[14px] border border-slate-800 bg-slate-950 shadow-sm lg:grid`}>
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 bg-slate-900 px-3 py-2">
         <div>
           <p className="text-xs font-bold uppercase tracking-[0.16em] text-emerald-400">Answer Console</p>

@@ -17,11 +17,11 @@ export type AssessmentSecurityPolicy = {
   copy_paste_block_enabled?: boolean;
   inspect_mode_block_enabled?: boolean;
   restart_timer_on_login?: boolean;
+  assessment_scoring_details_enabled?: boolean;
 };
 
 const compilerVersionLabels: Record<string, string> = {
   python: "Python 3.12",
-  javascript: "JavaScript Node 22",
   java: "Java 21",
   cpp: "C++ 20 (GCC 14)",
   c: "C23 (GCC 14)",
@@ -125,3 +125,5 @@ export type AssessmentBank = {
 };
 
 export const sectionOrder: AssessmentSectionId[] = ["DSA", "SQL", "OOPs", "MCQ"];
+
+

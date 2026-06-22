@@ -7,6 +7,8 @@ import {
   GraduationCap,
   Building2,
   ShieldAlert,
+  Gauge,
+  Target,
 } from "lucide-react";
 import { revalidatePath } from "next/cache";
 import Link from "next/link";
@@ -24,6 +26,7 @@ type ReportRow = {
   assessment_title: string | null;
   marks_score: number | null;
   capability_score: number | null;
+  problem_solving_score: number | null;
   dsa_score: number | null;
   sql_score: number | null;
   oops_score: number | null;
@@ -105,9 +108,9 @@ function score(value: number | null | undefined) {
   return Math.max(0, Math.min(100, Math.round(parsed)));
 }
 
-function average(rows: FilteredReport[], key: keyof FilteredReport) {
+function average(rows: FilteredReport[], selector: (row: FilteredReport) => number | null | undefined) {
   if (!rows.length) return 0;
-  return Math.round(rows.reduce((sum, row) => sum + score(row[key] as number | null), 0) / rows.length);
+  return Math.round(rows.reduce((sum, row) => sum + score(selector(row)), 0) / rows.length);
 }
 
 function formatDate(value: string | null | undefined) {
@@ -380,6 +383,7 @@ export default async function AdminReportsPage({
           "assessment_title",
           "marks_score",
           "capability_score",
+          "problem_solving_score",
           "dsa_score",
           "sql_score",
           "oops_score",
@@ -497,7 +501,24 @@ export default async function AdminReportsPage({
   ].filter(Boolean).length;
   const disqualifiedReports = filteredReports.filter((report) => isDisqualifiedReport(report.report_json));
 
+  const avgMarksScore = average(filteredReports, (report) => report.marks_score);
+  const avgProblemSolvingScore = average(filteredReports, (report) => report.problem_solving_score ?? report.capability_score);
+
   const statCards = [
+    {
+      label: "Avg Marks",
+      value: avgMarksScore,
+      icon: Gauge,
+      tone: "border-slate-200 bg-white text-slate-950",
+      detail: "Average overall score across filtered reports.",
+    },
+    {
+      label: "Avg Problem Solving",
+      value: avgProblemSolvingScore,
+      icon: Target,
+      tone: "border-emerald-200 bg-emerald-50 text-emerald-950",
+      detail: "Average problem-solving score across filtered reports.",
+    },
     {
       label: "Total Reports",
       value: filteredReports.length,
@@ -525,20 +546,6 @@ export default async function AdminReportsPage({
       icon: BadgeCheck,
       tone: "border-emerald-200 bg-emerald-50 text-emerald-950",
       detail: "Students who are ready for the next level.",
-    },
-    {
-      label: "Avg Marks",
-      value: average(filteredReports, "marks_score"),
-      icon: GraduationCap,
-      tone: "border-emerald-200 bg-emerald-50 text-emerald-950",
-      detail: "Weighted result for the selected scope.",
-    },
-    {
-      label: "Avg Problem Solving",
-      value: average(filteredReports, "capability_score"),
-      icon: BadgeCheck,
-      tone: "border-teal-200 bg-teal-50 text-teal-950",
-      detail: "Real problem-solving strength.",
     },
   ] as const;
 
@@ -769,8 +776,6 @@ export default async function AdminReportsPage({
                       <td className="px-4 py-4">
                         <div className="grid gap-2 text-xs text-slate-600">
                           <div className="flex flex-wrap gap-2">
-                            <span className="rounded-full border border-[var(--color-border-subtle)] bg-white px-2.5 py-1 font-semibold text-slate-800">Marks {score(report.marks_score)}</span>
-                            <span className="rounded-full border border-[var(--color-border-subtle)] bg-white px-2.5 py-1 font-semibold text-slate-800">Problem Solving {score(report.capability_score)}</span>
                           </div>
                           <div className="flex flex-wrap gap-2">
                             <span className="rounded-full border border-[var(--color-border-subtle)] bg-[var(--color-bg-muted)] px-2.5 py-1">DSA {score(report.dsa_score)}</span>
@@ -868,8 +873,6 @@ export default async function AdminReportsPage({
 
                   <div className="grid gap-2 rounded-[14px] border border-slate-200 bg-white px-3 py-3 text-xs text-slate-600">
                     <div className="flex flex-wrap gap-2">
-                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 font-semibold text-slate-800">Marks {score(report.marks_score)}</span>
-                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 font-semibold text-slate-800">Problem Solving {score(report.capability_score)}</span>
                     </div>
                     <div className="flex flex-wrap gap-2">
                       <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1">DSA {score(report.dsa_score)}</span>
@@ -931,3 +934,4 @@ export default async function AdminReportsPage({
     </div>
   );
 }
+

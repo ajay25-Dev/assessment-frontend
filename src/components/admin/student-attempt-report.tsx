@@ -481,14 +481,11 @@ export function StudentAttemptReport({
   })).filter((group) => group.questions.length > 0);
 
   const summaryMetrics = [
-    { label: "Overall Score", value: formatScore(report.marks_score), helper: "How the student performed overall in this assessment." },
-    { label: "Problem Solving Score", value: formatScore(report.problem_solving_score ?? report.capability_score), helper: "Deterministic score based on correctness, approach, complexity, edge cases, and code quality." },
-    { label: "Readiness Score", value: formatScore(dashboardOutput?.readiness_score), helper: "Placement readiness summary based on marks, capability, solution quality, and risk signals." },
-    { label: "Final Evaluation", value: readinessBucket, helper: "AI recommendation based on score, capability, and evidence." },
-    { label: "Main Learning Gap", value: report.weakest_section || "Not available", helper: "Topic that needs the most focused revision." },
-    { label: "Practice Priority", value: report.training_priority || "Not available", helper: "Suggested next topic or skill to practice." },
+    { label: "DSA", value: formatScore(report.dsa_score), helper: "Algorithmic problem-solving and complexity control." },
+    { label: "SQL", value: formatScore(report.sql_score), helper: "Query accuracy, logic, and output quality." },
+    { label: "OOPs", value: formatScore(report.oops_score), helper: "Abstraction, encapsulation, polymorphism, and SOLID principles." },
+    { label: "MCQ", value: formatScore(report.mcq_score), helper: "Concept recall and subject knowledge." },
   ];
-
   const aiSummarySections = [
     {
       title: "Teacher Summary",
