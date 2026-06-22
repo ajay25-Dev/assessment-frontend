@@ -898,6 +898,17 @@ function sanitizeAnswersForStorage(answers: Record<string, AnswerState>) {
   >;
 }
 
+function sanitizeAnswersForSubmission(answers: Record<string, AnswerState>) {
+  return Object.fromEntries(
+    Object.entries(answers).map(([questionId, answer]) => [
+      questionId,
+      {
+        ...answer,
+        sqlResult: null,
+      },
+    ]),
+  ) as Record<string, AnswerState>;
+}
 function buildTemporaryScorePreview(
   question: AssessmentQuestion,
   answer: AnswerState,
@@ -2519,7 +2530,7 @@ export function AssessmentShell({
     saveNow();
     setIsFinalizing(true);
     const integrityPayload = integrityViolationOverride || integrityViolation;
-    const answersForSubmission = sanitizeAnswersForStorage(answers);
+    const answersForSubmission = sanitizeAnswersForSubmission(answers);
     const startedAt = resolveAssessmentStartedAt(storageKey, sessionStartedAt) || new Date().toISOString();
 
     try {
@@ -3642,7 +3653,7 @@ export function AssessmentShell({
                 <button
                   type="button"
                   onClick={submitQuestion}
-                  disabled={isExecuting || isTimedOut || isSectionTimedOut || isIntegrityLocked}
+                  disabled={isExecuting || isTimedOut || isIntegrityLocked}
                   className="inline-flex h-10 items-center gap-2 rounded-[10px] bg-emerald-700 px-3 text-sm font-semibold text-white shadow-sm shadow-emerald-900/10 hover:bg-emerald-800 disabled:opacity-40"
                 >
                   <CheckCircle2 size={16} />
